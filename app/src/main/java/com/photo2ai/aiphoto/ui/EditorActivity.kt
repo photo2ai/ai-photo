@@ -901,25 +901,37 @@ class EditorActivity : AppCompatActivity() {
         override suspend fun result(): Bitmap? = result
     }
 
+    /** 用一个本地模型前确认已下载，见 [withModels] */
+    private fun withModel(m: LocalModels.Model, then: (File) -> Unit) = withModels(listOf(m), null) { then(it[0]) }
+
     /**
-     * 用本地模型前确认已下载：没有就提示大小，确认后下载（进度显示在忙碌框里，可以取消，下次续传），再执行 [then]。
+     * 用本地模型前确认都已下载：缺的一起提示总大小（[note] 是额外说明，比如许可），确认后依次下载（进度显示在忙碌框里，
+     * 可以取消，下次续传），全部就绪后执行 [then]，参数顺序和 [models] 一致。
      */
-    private fun withModel(m: LocalModels.Model, then: (File) -> Unit) {
+    private fun withModels(models: List<LocalModels.Model>, note: String?, then: (List<File>) -> Unit) {
         // 还有别的处理在跑时 busy() 不会开新任务：先拦下，免得「下载」点了没反应
         if (busyJob?.isActive == true) return toast("请等当前的处理完成")
-        LocalModels.ready(this, m)?.let { return then(it) }
-        val mb = "%.1f".format(m.size / 1048576.0)
+        val missing = models.filter { LocalModels.ready(this, it) == null }
+        if (missing.isEmpty()) return then(models.map { LocalModels.ready(this, it)!! })
+        val mb = "%.0f".format(missing.sumOf { it.size } / 1048576.0)
+        val names = missing.joinToString("、") { it.title }
         MaterialAlertDialogBuilder(this)
-            .setTitle("下载${m.title}")
-            .setMessage("第一次使用需要下载约 $mb MB 的模型，只下载一次，之后离线可用。建议在 Wi-Fi 下下载。")
+            .setTitle("下载模型")
+            .setMessage("第一次使用需要下载$names，共约 $mb MB，只下载一次，之后离线可用。建议在 Wi-Fi 下下载。" + (note?.let { "\n\n$it" } ?: ""))
             .setPositiveButton("下载") { _, _ ->
                 if (busyJob?.isActive == true) return@setPositiveButton toast("请等当前的处理完成")
-                var file: File? = null
-                busy("正在下载${m.title}…", cancellable = true) {
-                    file = LocalModels.download(this, m) { done, total ->
-                        if (total > 0) runOnUiThread { busyText.text = "正在下载${m.title}… ${done * 100 / total}%" }
+                var ok = false
+                busy("正在下载模型…", cancellable = true) {
+                    missing.forEachIndexed { k, m ->
+                        val step = if (missing.size > 1) "（${k + 1}/${missing.size}）" else ""
+                        LocalModels.download(this, m) { done, total ->
+                            if (total > 0) runOnUiThread { busyText.text = "正在下载${m.title}$step… ${done * 100 / total}%" }
+                        }
                     }
-                }.invokeOnCompletion { e -> if (e == null) file?.let { f -> runOnUiThread { then(f) } } }
+                    ok = true
+                }.invokeOnCompletion { e ->
+                    if (e == null && ok) runOnUiThread { then(models.map { LocalModels.ready(this, it)!! }) }
+                }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -1258,11 +1270,19 @@ class EditorActivity : AppCompatActivity() {
 
     private inner class FaceTool : CloudTool("换脸", "「换脸」把另一张照片里的脸换到这张照片的人物上，由云端图像模型完成。") {
         private var face: Bitmap? = null
-        private var cloudMode = false
+
+        /** 0 高清（本地神经网络）、1 快速（本地网格贴合）、2 云端 AI */
+        private var mode = 0
+        private val cloudMode get() = mode == 2
         override val needsCloud = false
 
-        override fun cloudNote(cfg: Store.Cloud) =
-            if (cloudMode) super.cloudNote(cfg) else "本地换脸在手机上完成，照片不会上传；正脸、角度相近的两张照片效果最好"
+        override fun cloudNote(cfg: Store.Cloud) = if (cloudMode) super.cloudNote(cfg) else localNote()
+
+        private fun localNote() = if (mode == 0) {
+            "高清换脸用本地神经网络模型（第一次使用下载约 430 MB），照片不会上传；模型来自 InsightFace，仅限非商业使用"
+        } else {
+            "快速换脸不用下载模型，照片不会上传；正脸、角度相近的两张照片效果最好"
+        }
 
         override fun enter() {
             if (Store.faceConsent) return
@@ -1277,13 +1297,14 @@ class EditorActivity : AppCompatActivity() {
 
         override fun cloudPanel(): List<View> {
             val go = button("开始换脸", primary = true) { go() }
-            val (modeRow, _) = chipRow(listOf("本地（免费）", "云端 AI（效果更好）"), if (cloudMode) 1 else 0) {
-                cloudMode = it == 1
+            val (modeRow, _) = chipRow(listOf("高清（本地）", "快速（本地）", "云端 AI"), mode) {
+                mode = it
                 rebuild()
             }
             return listOf(
                 modeRow,
                 hint("选一张正脸清楚的照片，把它的脸换到当前照片的人物上，保留当前照片的发型、表情、姿势和光线").apply { setPadding(0, dp(6), 0, dp(2)) },
+            ) + (if (Store.cloud() == null && !cloudMode) listOf(hint(localNote())) else emptyList()) + listOf(
                 refSlot(if (face == null) "选择提供脸的照片" else "已选择，点这里换一张", face) { face = it },
                 LinearLayout(this@EditorActivity).apply {
                     gravity = Gravity.END
@@ -1298,16 +1319,25 @@ class EditorActivity : AppCompatActivity() {
                 generate("AI 正在换脸…") { cfg -> Cloud.compose(cfg, current!!, f, CloudProtocol.FACE_SWAP_PROMPT) }
                 return
             }
-            busy("正在换脸…") {
+            if (mode == 1) return localSwap { FaceMesh.swap(current!!, f) }
+            if (!LocalModels.supported()) return alert("不支持", "这台手机是 32 位系统，用不了高清换脸的模型，可以选「快速」或「云端 AI」。")
+            withModels(
+                listOf(LocalModels.ARCFACE, LocalModels.INSWAPPER, LocalModels.ESRGAN),
+                "换脸模型来自 InsightFace（inswapper），只允许非商业使用。",
+            ) { (arc, insw, esr) -> localSwap { FaceMesh.neuralSwap(current!!, f, arc, insw, esr) } }
+        }
+
+        private fun localSwap(run: suspend () -> Bitmap) {
+            busy(if (mode == 0) "正在高清换脸…" else "正在换脸…") {
                 val r = try {
-                    FaceMesh.swap(current!!, f)
+                    run()
                 } catch (e: FaceMesh.NoFace) {
                     alert("没法换脸", e.message ?: "")
                     return@busy
                 }
                 result = r
                 photo.setImage(withContext(Dispatchers.Default) { ImageIO.fit(r, PREVIEW_SIDE) })
-                flashInfo("满意就点 ✓；效果不理想可以试试云端 AI", 4000)
+                flashInfo("满意就点 ✓（按住右下角对比原图）", 4000)
             }
         }
     }

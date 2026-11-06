@@ -14,14 +14,14 @@ import kotlin.coroutines.coroutineContext
 
 /** 本地模型推理（ONNX Runtime，CPU） */
 object LocalAi {
-    private val env by lazy { OrtEnvironment.getEnvironment() }
+    val env: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val sessions = HashMap<String, OrtSession>()
 
     class BrokenModel(message: String) : Exception(message)
 
     /** 加载失败说明模型文件坏了：删掉，提示重试（下次会重新下载） */
     @Synchronized
-    private fun session(file: File): OrtSession = sessions.getOrPut(file.path) {
+    fun session(file: File): OrtSession = sessions.getOrPut(file.path) {
         val opts = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(1, 4))
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -32,6 +32,12 @@ object LocalAi {
             LocalModels.discard(file)
             throw BrokenModel("模型文件损坏，已经删除，再试一次会重新下载")
         }
+    }
+
+    /** 用完大模型就释放（换脸的两个模型一共 450MB，一起常驻容易被系统杀掉） */
+    @Synchronized
+    fun release(file: File) {
+        sessions.remove(file.path)?.close()
     }
 
     private fun direct(bytes: ByteArray): ByteBuffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).put(bytes).apply { rewind() }

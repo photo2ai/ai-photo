@@ -35,11 +35,68 @@ object FaceSwap {
         }
         for (i in mask.indices) mask[i] *= cover[i]
         // 肤色统计只看皮肤：蒙版里足够确定的部分（已经扣掉眼睛和嘴）
-        val colored = matchColor(warped, dst, mask)
+        val matched = matchColor(warped, dst, mask)
+        // 光照迁移：明暗的大轮廓（哪边亮、哪边有阴影）换成目标照片的，五官和皮肤的细节保留参考脸的
+        val colored = relight(matched, dst, ovalMask, cover, dw, dh, maxOf(3, (faceWidth / 8f).toInt()))
         // 色差修正只取外轮廓那一圈（不能取眼睛、嘴的边：那里是唇色、牙齿和皮肤的差，会把怪颜色扩散到整张脸）
         val ring = FloatArray(mask.size) { if (cover[it] > 0f) ovalMask[it] else 0f }
         val corrected = seamCorrect(colored, dst, ring, mask, dw, dh)
         return Pixels.composite(corrected, dst, mask)
+    }
+
+    /**
+     * 光照迁移：两边亮度各做「只在脸上算」的大半径模糊（归一化卷积，避免把头发、背景混进来），
+     * 差值加到贴上去的脸上。效果是低频的明暗跟目标走，高频的细节不变。
+     */
+    fun relight(face: IntArray, target: IntArray, region: FloatArray, cover: FloatArray, w: Int, h: Int, r: Int): IntArray {
+        val m = FloatArray(face.size) { if (region[it] > 0.01f && cover[it] > 0f) 1f else 0f }
+        val ys = FloatArray(face.size) { Pixels.luma(face[it]) * m[it] }
+        val yt = FloatArray(face.size) { Pixels.luma(target[it]) * m[it] }
+        val bm = Pixels.blurF(m, w, h, r, 3)
+        val bs = Pixels.blurF(ys, w, h, r, 3)
+        val bt = Pixels.blurF(yt, w, h, r, 3)
+        val out = face.copyOf()
+        for (i in face.indices) {
+            if (m[i] == 0f || bm[i] < 0.05f) continue
+            val d = ((bt[i] - bs[i]) / bm[i]).coerceIn(-60f, 60f)
+            val c = face[i]
+            out[i] = Pixels.rgb(c, Pixels.clamp255((c shr 16 and 0xff) + d), Pixels.clamp255((c shr 8 and 0xff) + d), Pixels.clamp255((c and 0xff) + d))
+        }
+        return out
+    }
+
+    /** 眼睛、嘴的张开程度：轮廓外接框的高 / 宽 */
+    fun openness(pts: FloatArray, idx: IntArray): Float {
+        val b = bounds(polygon(pts, idx))
+        return if (b[2] <= 0f) 0f else b[3] / b[2]
+    }
+
+    /**
+     * 两张脸这个部位张开程度差不多（比如都睁眼、都闭嘴）就一起换，五官更像参考脸；差得多（一个眯眼一个睁眼、
+     * 一个大笑一个闭嘴）就保留目标自己的，否则会拉出两团黑或撕裂的嘴
+     */
+    fun similarOpenness(a: Float, b: Float): Boolean {
+        if (maxOf(a, b) < 0.08f) return true // 都闭着
+        return minOf(a, b) / maxOf(a, b) >= 0.75f
+    }
+
+    /**
+     * 5 个关键点（图里的左眼中心、右眼中心、鼻尖、左嘴角、右嘴角），给神经网络换脸对齐用。
+     * [eyeA]、[eyeB] 是两只眼睛的轮廓编号（不管哪只在左），[nose] 鼻尖，[mouthA]、[mouthB] 两个嘴角。
+     */
+    fun fivePoints(pts: FloatArray, eyeA: IntArray, eyeB: IntArray, nose: Int, mouthA: Int, mouthB: Int): FloatArray {
+        fun center(idx: IntArray): FloatArray {
+            var x = 0f; var y = 0f
+            for (i in idx) { x += pts[2 * i]; y += pts[2 * i + 1] }
+            return floatArrayOf(x / idx.size, y / idx.size)
+        }
+        val e1 = center(eyeA)
+        val e2 = center(eyeB)
+        val (le, re) = if (e1[0] <= e2[0]) e1 to e2 else e2 to e1
+        val m1 = floatArrayOf(pts[2 * mouthA], pts[2 * mouthA + 1])
+        val m2 = floatArrayOf(pts[2 * mouthB], pts[2 * mouthB + 1])
+        val (lm, rm) = if (m1[0] <= m2[0]) m1 to m2 else m2 to m1
+        return floatArrayOf(le[0], le[1], re[0], re[1], pts[2 * nose], pts[2 * nose + 1], lm[0], lm[1], rm[0], rm[1])
     }
 
     private fun polygon(pts: FloatArray, idx: IntArray) = FloatArray(idx.size * 2) { if (it % 2 == 0) pts[idx[it / 2] * 2] else pts[idx[it / 2] * 2 + 1] }

@@ -1,9 +1,9 @@
 {
-  "versionCode": 4,
-  "versionName": "1.0.3",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.3.apk",
-  "sha256": "d66e1322e4c23fe087d7445b2f38be03fcf78b7aee86766050fc63d31b56b95e",
-  "size": 28415965,
-  "notes": "修复：本地模型改为优先从国内镜像下载（快十倍以上）、模型文件损坏时自动重新下载；更新包安装前的校验不再卡界面；下载取消时不再占着网络连接；换脸确认提示写明本地模式不上传照片。",
+  "versionCode": 5,
+  "versionName": "1.0.4",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.4.apk",
+  "sha256": "01fc9aa43f61a761350a08678f951a94be44e6a3640313af64c64017d95ee359",
+  "size": 28424157,
+  "notes": "本地换脸大升级：新增「高清」模式，用神经网络换脸模型（第一次使用下载约 430 MB，模型仅限非商业使用），效果接近专业换脸工具；原来的方式改名「快速」，改进了光照和五官处理。",
   "force": false
 }
