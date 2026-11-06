@@ -201,10 +201,13 @@ object FaceSwap {
                 continue
             }
             val c = src[i]
-            val (y, cb, cr) = ycc(c)
+            val r = (c shr 16 and 0xff).toFloat()
+            val g = (c shr 8 and 0xff).toFloat()
+            val b = (c and 0xff).toFloat()
+            val y = 0.299f * r + 0.587f * g + 0.114f * b
             val y2 = (y - ms[0]) * gY + mt[0]
-            val cb2 = (cb - ms[1]) * gC + mt[1]
-            val cr2 = (cr - ms[2]) * gC + mt[2]
+            val cb2 = ((b - y) / 1.772f - ms[1]) * gC + mt[1]
+            val cr2 = ((r - y) / 1.402f - ms[2]) * gC + mt[2]
             out[i] = Pixels.rgb(
                 c,
                 Pixels.clamp255(y2 + 1.402f * cr2),
@@ -215,38 +218,28 @@ object FaceSwap {
         return out
     }
 
-    /** Y、Cb、Cr（色度以 0 为中心） */
-    private fun ycc(c: Int): Triple<Float, Float, Float> {
-        val r = (c shr 16 and 0xff).toFloat()
-        val g = (c shr 8 and 0xff).toFloat()
-        val b = (c and 0xff).toFloat()
-        val y = 0.299f * r + 0.587f * g + 0.114f * b
-        return Triple(y, (b - y) / 1.772f, (r - y) / 1.402f)
-    }
-
-    /** 蒙版加权的 Y、Cb、Cr 均值（0..2）和标准差（3..5）；蒙版几乎为空时 null */
+    /** 蒙版加权的 Y、Cb、Cr（色度以 0 为中心）均值（0..2）和标准差（3..5）；蒙版几乎为空时 null */
     private fun stats(px: IntArray, mask: FloatArray): FloatArray? {
         var wsum = 0.0
-        val s = DoubleArray(3)
-        val s2 = DoubleArray(3)
+        var sy = 0.0; var sb = 0.0; var sr = 0.0
+        var sy2 = 0.0; var sb2 = 0.0; var sr2 = 0.0
         for (i in px.indices) {
             val m = mask[i]
             if (m < 0.5f) continue
-            val (y, cb, cr) = ycc(px[i])
-            val v = floatArrayOf(y, cb, cr)
-            for (k in 0..2) {
-                s[k] += v[k] * m
-                s2[k] += v[k].toDouble() * v[k] * m
-            }
+            val c = px[i]
+            val r = (c shr 16 and 0xff).toDouble()
+            val g = (c shr 8 and 0xff).toDouble()
+            val b = (c and 0xff).toDouble()
+            val y = 0.299 * r + 0.587 * g + 0.114 * b
+            val cb = (b - y) / 1.772
+            val cr = (r - y) / 1.402
+            sy += y * m; sb += cb * m; sr += cr * m
+            sy2 += y * y * m; sb2 += cb * cb * m; sr2 += cr * cr * m
             wsum += m
         }
         if (wsum < 16) return null
-        val out = FloatArray(6)
-        for (k in 0..2) {
-            val mean = s[k] / wsum
-            out[k] = mean.toFloat()
-            out[3 + k] = sqrt(max(0.0, s2[k] / wsum - mean * mean)).toFloat()
-        }
-        return out
+        val mean = doubleArrayOf(sy / wsum, sb / wsum, sr / wsum)
+        val sq = doubleArrayOf(sy2 / wsum, sb2 / wsum, sr2 / wsum)
+        return FloatArray(6) { k -> if (k < 3) mean[k].toFloat() else sqrt(max(0.0, sq[k - 3] - mean[k - 3] * mean[k - 3])).toFloat() }
     }
 }

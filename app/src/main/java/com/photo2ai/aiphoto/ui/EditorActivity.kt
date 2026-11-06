@@ -236,6 +236,8 @@ class EditorActivity : AppCompatActivity() {
                 alert("内存不足", "这张图太大，处理时内存不够。可以先裁小一些再试。")
             } catch (e: CloudProtocol.Failure) {
                 alert("AI 处理失败", e.message ?: "")
+            } catch (e: LocalAi.BrokenModel) {
+                alert("模型出错", e.message ?: "")
             } catch (e: Exception) {
                 android.util.Log.w("AIPhoto", "$text failed", e)
                 alert("出错了", e.message ?: e.javaClass.simpleName)
@@ -903,12 +905,15 @@ class EditorActivity : AppCompatActivity() {
      * 用本地模型前确认已下载：没有就提示大小，确认后下载（进度显示在忙碌框里，可以取消，下次续传），再执行 [then]。
      */
     private fun withModel(m: LocalModels.Model, then: (File) -> Unit) {
+        // 还有别的处理在跑时 busy() 不会开新任务：先拦下，免得「下载」点了没反应
+        if (busyJob?.isActive == true) return toast("请等当前的处理完成")
         LocalModels.ready(this, m)?.let { return then(it) }
         val mb = "%.1f".format(m.size / 1048576.0)
         MaterialAlertDialogBuilder(this)
             .setTitle("下载${m.title}")
             .setMessage("第一次使用需要下载约 $mb MB 的模型，只下载一次，之后离线可用。建议在 Wi-Fi 下下载。")
             .setPositiveButton("下载") { _, _ ->
+                if (busyJob?.isActive == true) return@setPositiveButton toast("请等当前的处理完成")
                 var file: File? = null
                 busy("正在下载${m.title}…", cancellable = true) {
                     file = LocalModels.download(this, m) { done, total ->
@@ -1263,7 +1268,7 @@ class EditorActivity : AppCompatActivity() {
             if (Store.faceConsent) return
             MaterialAlertDialogBuilder(this@EditorActivity)
                 .setTitle("使用前请确认")
-                .setMessage("换脸只用于你自己的照片，或已经得到照片中本人同意的照片。不要用它冒充他人、制作误导或侵犯他人权益的内容。\n\n照片会发送到你在设置里配置的 AI 服务，服务可能按自己的规则拒绝处理。")
+                .setMessage("换脸只用于你自己的照片，或已经得到照片中本人同意的照片。不要用它冒充他人、制作误导或侵犯他人权益的内容。\n\n「本地」模式在手机上完成，照片不上传；「云端 AI」模式会把两张照片发送到你在设置里配置的服务，服务可能按自己的规则拒绝处理。")
                 .setPositiveButton("我已了解") { _, _ -> Store.faceConsent = true }
                 .setNegativeButton("不用了") { _, _ -> closeTool() }
                 .setCancelable(false)

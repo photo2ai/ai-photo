@@ -1,9 +1,9 @@
 {
-  "versionCode": 3,
-  "versionName": "1.0.2",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.2.apk",
-  "sha256": "2d1c5bb12588d49136ef80beb56559702351895f1580ffa2c771056a1f761cd7",
+  "versionCode": 4,
+  "versionName": "1.0.3",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.3.apk",
+  "sha256": "d66e1322e4c23fe087d7445b2f38be03fcf78b7aee86766050fc63d31b56b95e",
   "size": 28415965,
-  "notes": "新增：本地 AI 消除（免费离线，效果比快速消除好很多）、变清晰（本地 AI 放大 2 / 4 倍）、本地换脸（免费）；云端默认改为火山引擎豆包 Seedream（国内直连，新用户有免费额度）；首页常用工具改为五列。本地模型第一次使用时下载。",
+  "notes": "修复：本地模型改为优先从国内镜像下载（快十倍以上）、模型文件损坏时自动重新下载；更新包安装前的校验不再卡界面；下载取消时不再占着网络连接；换脸确认提示写明本地模式不上传照片。",
   "force": false
 }

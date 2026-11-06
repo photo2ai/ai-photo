@@ -125,10 +125,17 @@ object Cloud {
     private suspend fun fetchResult(r: Pair<ByteArray?, String?>): ByteArray {
         val (bytes, url) = r
         if (bytes != null) return bytes
+        if (url == null) throw Failure("服务没有返回图片")
         return withContext(Dispatchers.IO) {
-            client.newCall(Request.Builder().url(url!!).build()).await().use { r ->
-                if (!r.isSuccessful) throw Failure("下载结果图失败（HTTP ${r.code}）")
-                r.body?.bytes() ?: throw Failure("下载结果图失败")
+            try {
+                client.newCall(Request.Builder().url(url).build()).await().use { r ->
+                    if (!r.isSuccessful) throw Failure("下载结果图失败（HTTP ${r.code}）")
+                    r.body?.bytes() ?: throw Failure("下载结果图失败")
+                }
+            } catch (e: IOException) {
+                throw Failure("下载结果图时网络错误：" + (e.message ?: e.javaClass.simpleName))
+            } catch (e: IllegalArgumentException) {
+                throw Failure("结果图地址不对：$url")
             }
         }
     }

@@ -9,6 +9,8 @@ object Store {
 
     fun init(context: Context) {
         p = context.getSharedPreferences("aiphoto", Context.MODE_PRIVATE)
+        // 1.0.2 起默认服务从 Gemini 改成火山引擎。以前没切换过服务（没存 provider）、但填了 Gemini Key 的，继续用 Gemini
+        if (!p.contains("provider") && key(CloudProtocol.GEMINI).isNotEmpty()) provider = CloudProtocol.GEMINI
     }
 
     class Cloud(val provider: String, val key: String, val base: String, val model: String)

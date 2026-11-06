@@ -1,6 +1,6 @@
 # 本地模型
 
-App 第一次用到对应功能时从这里下载（和应用内更新走同样的镜像，下载后按 SHA-256 校验，见 `core/LocalModels.kt`）。改了文件要同步改代码里的校验值和大小。
+App 第一次用到对应功能时下载，先试 hf-mirror.com（模型原本在 Hugging Face，国内直连快），再试 Hugging Face 原地址，最后才用这里（GitHub 镜像国内直连只有 10～20KB/s），下载后按 SHA-256 校验，见 `core/LocalModels.kt`。这里的文件和 Hugging Face 上的是同一个；改了要同步改代码里的校验值、大小和 Hugging Face 路径。
 
 | 文件 | 用途 | 来源 | 许可 |
 |---|---|---|---|

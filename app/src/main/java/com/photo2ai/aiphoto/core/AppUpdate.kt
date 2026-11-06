@@ -31,25 +31,21 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 应用内更新（移植自 TV Player）。版本说明是仓库里的 `releases/app-version.json`：
- * `{"versionCode": 2, "versionName": "1.0.1", "url": "https://…/app.apk", "sha256": "…", "size": 123, "notes": "…", "force": false}`.
- * The downloaded file is checked against `sha256`, and Android itself refuses to install an update that is not
- * signed with the same key as the installed app, so a tampered download cannot replace the app.
+ * `{"versionCode": 2, "versionName": "1.0.1", "url": "https://…/app.apk", "sha256": "…", "size": 123, "notes": "…", "force": false}`。
+ * 下载的文件按 `sha256` 校验；安装前再核对包名和签名证书（见 [verifyPackage]），系统本身也拒绝签名不同的覆盖安装。
  */
 object AppUpdate {
     class Info(val code: Int, val name: String, val url: String, val sha256: String, val notes: String, val size: Long, val force: Boolean)
 
     class Check(val info: Info?, val error: String?)
 
-    /**
-     * The default source, and the same file through other GitHub mirrors and GitHub itself. Mirrors differ in speed and in
-     * how long they keep an old copy, so they are asked at the same time.
-     */
+    /** 版本说明的地址：gh-proxy 及其它镜像和 GitHub 原地址。各镜像快慢不同、缓存旧文件的时间也不同，所以同时问 */
     private const val GITHUB_PATH = "photo2ai/ai-photo/main/releases/app-version.json"
     private val MIRRORS = mirrorsOf("https://gh-proxy.com/https://raw.githubusercontent.com/$GITHUB_PATH")
 
     /**
-     * The same GitHub file through each mirror. [url] is a gh-proxy address of the form
-     * `https://gh-proxy.com/https://raw.githubusercontent.com/<repo path>`; other addresses are used as they are.
+     * 同一个 GitHub 文件在各个镜像上的地址。[url] 是 `https://gh-proxy.com/https://raw.githubusercontent.com/<仓库路径>`
+     * 形式的 gh-proxy 地址；别的地址原样使用。
      */
     fun mirrorsOf(url: String): List<String> {
         val prefix = "https://gh-proxy.com/https://raw.githubusercontent.com/"
@@ -64,11 +60,11 @@ object AppUpdate {
         )
     }
 
-    /** After the first usable answer, the others get this long: a fresher copy from a slower mirror may still win. */
+    /** 拿到第一个可用回答后，再等其它镜像这么久：慢一点的镜像可能有更新的版本 */
     private const val GRACE_MS = 3_000L
     private val fetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** [info] is null when this version is current, was skipped by the user, or the manifest is missing. */
+    /** 已是最新、用户跳过了这个版本、或版本说明不存在时 [info] 为 null */
     suspend fun check(respectIgnored: Boolean): Check {
         val (o, error) = newestManifest(MIRRORS)
         if (o == null) return Check(null, error)
@@ -86,8 +82,8 @@ object AppUpdate {
     }
 
     /**
-     * The manifest with the highest versionCode among the answers. Waits for the first usable answer, then at most
-     * [GRACE_MS] more for the rest; the requests still open then are cancelled. A 404 (no manifest there) is not an error.
+     * 各镜像回答里 versionCode 最高的版本说明。等第一个可用回答，再最多等 [GRACE_MS]，之后还没回的请求取消。
+     * 404（那里没有版本说明）不算出错。
      */
     private suspend fun newestManifest(urls: List<String>): Pair<JSONObject?, String?> {
         val answers = Channel<Pair<JSONObject?, String?>>(urls.size)
@@ -109,8 +105,8 @@ object AppUpdate {
     }
 
     /**
-     * The first mirror that answers with a file wins: the others are cancelled, so the download comes from the fastest
-     * one. Fails only when no mirror has the file.
+     * 第一个回应文件的镜像胜出，其它请求取消，所以从最快的镜像下载。所有镜像都没有这个文件才失败；
+     * 只要有一个镜像回 416（续传位置不对），错误信息里就带上 416，调用方据此删掉残留重新下载。
      */
     private suspend fun openFirst(urls: List<String>, client: OkHttpClient, headers: Map<String, String> = emptyMap()): Response {
         val calls = urls.map { url ->
@@ -120,6 +116,7 @@ object AppUpdate {
         val jobs = calls.map { call -> fetchScope.launch { answers.send(call to runCatching { call.execute() }.getOrNull()) } }
         var winner: Response? = null
         var lastCode = 0
+        var saw416 = false
         try {
             repeat(calls.size) {
                 val (call, r) = answers.receive()
@@ -129,16 +126,22 @@ object AppUpdate {
                     calls.forEach { other -> if (other !== call) other.cancel() }
                 } else {
                     lastCode = r.code
+                    if (r.code == 416) saw416 = true
                     r.close()
                 }
             }
         } catch (e: CancellationException) {
-            // The download was abandoned: stop every request, including a winner nobody will read.
+            // 下载被放弃：停掉所有请求，已经到了但没人读的响应（包括胜出的那个）都要关掉，否则连接泄漏
             calls.forEach { it.cancel() }
             winner?.close()
+            while (true) {
+                val (_, r) = answers.tryReceive().getOrNull() ?: break
+                r?.close()
+            }
             throw e
         }
         jobs.forEach { it.cancel() }
+        if (saw416 && winner == null) lastCode = 416
         return winner ?: error("下载失败（" + (if (lastCode > 0) "HTTP $lastCode" else "所有线路都连不上") + "）")
     }
 
@@ -156,8 +159,8 @@ object AppUpdate {
     private fun updatesDir(context: Context) = File(context.cacheDir, "updates").apply { mkdirs() }
 
     /**
-     * A finished download of [info] still in the cache, checked against the manifest's hash again (the same version
-     * code may have been re-published); null when there is none. Hashes the file: call it off the main thread.
+     * 缓存里已经下好的 [info] 安装包，按版本说明的校验值再核对一次（同一个版本号可能重新发布过）；没有则 null。
+     * 要算整个文件的哈希，不要在主线程调用。
      */
     fun ready(context: Context, info: Info): File? {
         val file = File(updatesDir(context), "app-${info.code}.apk")
@@ -182,14 +185,12 @@ object AppUpdate {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    /** Bytes a broken-off download of [info] left behind; the next download goes on from there. */
+    /** [info] 中断的下载已经留下的字节数，下次从这里续传 */
     fun partialBytes(context: Context, info: Info): Long = File(updatesDir(context), "app-${info.code}.apk.part").length()
 
     /**
-     * Downloads into the cache directory and verifies the hash. Throws with a readable message on failure. A download
-     * that broke off (network gone, app killed, cancelled) left `.part` behind: it is continued with a Range request,
-     * and the bytes already there are hashed first so the check still covers the whole file. A mirror that ignores
-     * the range answers 200 with the whole file, which then simply starts over.
+     * 下载安装包到缓存目录并校验，失败时抛出可读的错误信息。中断（断网、杀进程、取消）留下的 `.part` 用 Range 续传，
+     * 已有的部分先算进哈希，校验仍覆盖整个文件；不支持 Range 的镜像回 200 整个文件，就从头来。
      */
     suspend fun download(context: Context, info: Info, onProgress: (done: Long, total: Long) -> Unit): File {
         val dir = updatesDir(context)
@@ -225,7 +226,7 @@ object AppUpdate {
             val response = try {
                 openFirst(mirrorsOf(url), client, headers)
             } catch (e: IllegalStateException) {
-                // 416: no mirror can continue from here (the remainder is not of this file): start over without it.
+                // 416：没有镜像能从这里续传（残留的部分不属于这个文件），删掉重新下载
                 if (have > 0 && e.message?.contains("416") == true) {
                     part.delete()
                     return@withContext downloadVerified(url, sha256, size, part, file, onProgress)
@@ -270,7 +271,7 @@ object AppUpdate {
 
     fun canInstall(context: Context) = context.packageManager.canRequestPackageInstalls()
 
-    /** Opens the system installer; the caller must have checked [canInstall]. */
+    /** 打开系统安装器；调用前要确认 [canInstall] */
     fun install(activity: Activity, file: File) {
         val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.files", file)
         activity.startActivity(

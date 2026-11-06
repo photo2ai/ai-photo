@@ -3,6 +3,7 @@ package com.photo2ai.aiphoto.core
 import ai.onnxruntime.OnnxJavaType
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtException
 import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.ensureActive
 import java.io.File
@@ -16,13 +17,21 @@ object LocalAi {
     private val env by lazy { OrtEnvironment.getEnvironment() }
     private val sessions = HashMap<String, OrtSession>()
 
+    class BrokenModel(message: String) : Exception(message)
+
+    /** 加载失败说明模型文件坏了：删掉，提示重试（下次会重新下载） */
     @Synchronized
     private fun session(file: File): OrtSession = sessions.getOrPut(file.path) {
         val opts = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(1, 4))
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
-        env.createSession(file.path, opts)
+        try {
+            env.createSession(file.path, opts)
+        } catch (e: OrtException) {
+            LocalModels.discard(file)
+            throw BrokenModel("模型文件损坏，已经删除，再试一次会重新下载")
+        }
     }
 
     private fun direct(bytes: ByteArray): ByteBuffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).put(bytes).apply { rewind() }

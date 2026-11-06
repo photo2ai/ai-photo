@@ -77,7 +77,7 @@ object UpdateUi {
             .show()
         job = a.lifecycleScope.launch {
             try {
-                val file = AppUpdate.ready(a, info) ?: AppUpdate.download(a, info) { done, total ->
+                val file = withContext(Dispatchers.IO) { AppUpdate.ready(a, info) } ?: AppUpdate.download(a, info) { done, total ->
                     val p = if (total > 0) (done * 1000 / total).toInt() else -1
                     if (p == lastPermille) return@download
                     lastPermille = p
