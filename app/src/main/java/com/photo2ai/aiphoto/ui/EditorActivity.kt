@@ -45,10 +45,13 @@ import com.photo2ai.aiphoto.core.Cloud
 import com.photo2ai.aiphoto.core.CloudProtocol
 import com.photo2ai.aiphoto.core.Cutout
 import com.photo2ai.aiphoto.core.Enhance
+import com.photo2ai.aiphoto.core.FaceMesh
 import com.photo2ai.aiphoto.core.Filters
 import com.photo2ai.aiphoto.core.History
 import com.photo2ai.aiphoto.core.ImageIO
 import com.photo2ai.aiphoto.core.Inpaint
+import com.photo2ai.aiphoto.core.LocalAi
+import com.photo2ai.aiphoto.core.LocalModels
 import com.photo2ai.aiphoto.core.Pixels
 import com.photo2ai.aiphoto.core.Segment
 import com.photo2ai.aiphoto.core.Store
@@ -75,6 +78,7 @@ class EditorActivity : AppCompatActivity() {
         const val TOOL_FILTER = "filter"
         const val TOOL_CROP = "crop"
         const val TOOL_FACE = "face"
+        const val TOOL_UPSCALE = "upscale"
         const val TOOL_OUTFIT = "outfit"
 
         /** 预览图（显示、实时预览都用它）的长边 */
@@ -220,10 +224,10 @@ class EditorActivity : AppCompatActivity() {
     }
 
     /** 跑一件耗时的事：期间显示进度、禁用按钮；出错弹窗说明 */
-    private fun busy(text: String, cancellable: Boolean = false, block: suspend () -> Unit) {
-        if (busyJob?.isActive == true) return
+    private fun busy(text: String, cancellable: Boolean = false, block: suspend () -> Unit): Job {
+        busyJob?.takeIf { it.isActive }?.let { return it }
         showBusy(text, cancellable)
-        busyJob = lifecycleScope.launch {
+        return lifecycleScope.launch {
             try {
                 block()
             } catch (e: CancellationException) {
@@ -238,7 +242,7 @@ class EditorActivity : AppCompatActivity() {
             } finally {
                 hideBusy()
             }
-        }
+        }.also { busyJob = it }
     }
 
     private fun setControlsEnabled(on: Boolean) {
@@ -358,10 +362,11 @@ class EditorActivity : AppCompatActivity() {
 
     private val toolDefs = listOf(
         ToolDef(TOOL_ENHANCE, R.drawable.ic_magic, "智能增强"),
+        ToolDef(TOOL_UPSCALE, R.drawable.ic_hd, "变清晰"),
         ToolDef(TOOL_AI, R.drawable.ic_sparkle, "AI 修图"),
         ToolDef(TOOL_FACE, R.drawable.ic_face, "换脸"),
         ToolDef(TOOL_OUTFIT, R.drawable.ic_shirt, "换装"),
-        ToolDef(TOOL_ERASE, R.drawable.ic_eraser, "消除"),
+        ToolDef(TOOL_ERASE, R.drawable.ic_eraser, "消除笔"),
         ToolDef(TOOL_CUTOUT, R.drawable.ic_person, "抠图"),
         ToolDef(TOOL_ADJUST, R.drawable.ic_tune, "调整"),
         ToolDef(TOOL_FILTER, R.drawable.ic_filter, "滤镜"),
@@ -404,6 +409,7 @@ class EditorActivity : AppCompatActivity() {
             TOOL_FILTER -> FilterTool()
             TOOL_CROP -> CropTool()
             TOOL_FACE -> FaceTool()
+            TOOL_UPSCALE -> UpscaleTool()
             TOOL_OUTFIT -> OutfitTool()
             else -> return
         }
@@ -826,6 +832,94 @@ class EditorActivity : AppCompatActivity() {
         }
     }
 
+    private inner class UpscaleTool : Tool("变清晰") {
+        private var factor = 2
+        private var result: Bitmap? = null
+        private lateinit var sizeText: TextView
+
+        override fun panel(): View {
+            val (row, _) = chipRow(listOf("放大 2 倍", "放大 4 倍"), 0) {
+                factor = if (it == 0) 2 else 4
+                updateSize()
+            }
+            sizeText = hint("")
+            updateSize()
+            val go = button("开始", primary = true) { go() }
+            return column(
+                hint("本地 AI 模型放大照片，同时去模糊、去噪点，适合小图、截图、老照片；照片不会上传"),
+                row,
+                LinearLayout(this@EditorActivity).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(6), 0, 0)
+                    addView(sizeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(go)
+                },
+            )
+        }
+
+        /** 送进模型的尺寸：2 倍时先缩小一半再放大 4 倍；输出不超过可编辑的最大像素，输入不超过 100 万像素（手机上要算几十秒） */
+        private fun inputSize(): Pair<Int, Int> {
+            val b = current!!
+            var w = b.width * factor / 4.0
+            var h = b.height * factor / 4.0
+            val maxIn = minOf(1_000_000.0, ImageIO.maxPixels() / 16.0)
+            if (w * h > maxIn) {
+                val k = Math.sqrt(maxIn / (w * h))
+                w *= k
+                h *= k
+            }
+            return maxOf(1, w.toInt()) to maxOf(1, h.toInt())
+        }
+
+        private fun updateSize() {
+            val b = current!!
+            val (w, h) = inputSize()
+            sizeText.text = "${b.width} × ${b.height} → ${w * 4} × ${h * 4}" + if (w * 4 < b.width * factor) "（已按内存限制）" else ""
+        }
+
+        private fun go() {
+            if (!LocalModels.supported()) return alert("不支持", "这台手机是 32 位系统，用不了本地 AI 模型。")
+            withModel(LocalModels.ESRGAN) { model ->
+                busy("正在变清晰…", cancellable = true) {
+                    val (w, h) = inputSize()
+                    val r = withContext(Dispatchers.Default) {
+                        val src = ImageIO.scaled(current!!, w, h)
+                        val out = LocalAi.upscale4x(model, ImageIO.pixels(src), w, h) { p ->
+                            runOnUiThread { busyText.text = "正在变清晰… ${(p * 100).toInt()}%" }
+                        }
+                        ImageIO.toBitmap(out, w * 4, h * 4)
+                    }
+                    result = r
+                    photo.setImage(withContext(Dispatchers.Default) { ImageIO.fit(r, PREVIEW_SIDE) })
+                    flashInfo("已放大到 ${r.width} × ${r.height}，满意就点 ✓（按住右下角对比）", 4000)
+                }
+            }
+        }
+
+        override suspend fun result(): Bitmap? = result
+    }
+
+    /**
+     * 用本地模型前确认已下载：没有就提示大小，确认后下载（进度显示在忙碌框里，可以取消，下次续传），再执行 [then]。
+     */
+    private fun withModel(m: LocalModels.Model, then: (File) -> Unit) {
+        LocalModels.ready(this, m)?.let { return then(it) }
+        val mb = "%.1f".format(m.size / 1048576.0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("下载${m.title}")
+            .setMessage("第一次使用需要下载约 $mb MB 的模型，只下载一次，之后离线可用。建议在 Wi-Fi 下下载。")
+            .setPositiveButton("下载") { _, _ ->
+                var file: File? = null
+                busy("正在下载${m.title}…", cancellable = true) {
+                    file = LocalModels.download(this, m) { done, total ->
+                        if (total > 0) runOnUiThread { busyText.text = "正在下载${m.title}… ${done * 100 / total}%" }
+                    }
+                }.invokeOnCompletion { e -> if (e == null) file?.let { f -> runOnUiThread { then(f) } } }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private inner class CutoutTool : Tool("人像抠图") {
         private var mask: Segment.Mask? = null
         private var effect = intent.getStringExtra(EXTRA_EFFECT)
@@ -877,28 +971,32 @@ class EditorActivity : AppCompatActivity() {
         }
     }
 
-    private inner class EraseTool : Tool("消除") {
+    private inner class EraseTool : Tool("消除笔") {
         /** 这次进来后已经消除过的整图 */
         private var pending: Bitmap? = null
         private lateinit var undoStroke: View
-        private lateinit var quick: View
-        private lateinit var ai: View
+        private lateinit var cloud: View
+        private lateinit var local: View
 
         override fun panel(): View {
             val (sizeRow, _) = sliderRow("笔刷", 8f, 60f, 22f) { photo.brushRadius = it * resources.displayMetrics.density }
             undoStroke = button("撤销一笔") { photo.undoStroke() }
-            quick = button("快速消除") { quick() }
-            ai = button("AI 消除", primary = true) { ai() }
+            cloud = button("云端消除") { cloudErase() }
+            local = button("一键消除", primary = true) { localErase() }
             val buttons = LinearLayout(this@EditorActivity).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(4), 0, 0)
                 addView(undoStroke)
                 addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-                addView(quick)
+                addView(cloud)
                 addView(View(context), LinearLayout.LayoutParams(dp(8), 1))
-                addView(ai)
+                addView(local)
             }
-            return column(hint("涂抹要去掉的东西，双指缩放移动。快速消除在手机上完成，适合小瑕疵；AI 消除效果更好，需要联网"), sizeRow, buttons)
+            return column(
+                hint("涂抹要去掉的东西（盖住整个物体，连影子一起），双指缩放移动。「一键消除」用本地 AI 模型，免费离线；大块复杂的背景可以试试「云端消除」"),
+                sizeRow,
+                buttons,
+            )
         }
 
         override fun enter() {
@@ -914,8 +1012,27 @@ class EditorActivity : AppCompatActivity() {
 
         private fun updateEnabled() {
             val has = photo.hasMask
-            for (v in listOf(undoStroke, quick, ai)) {
+            for (v in listOf(undoStroke, cloud, local)) {
                 v.isEnabled = has
+            }
+        }
+
+        /** 本地 MI-GAN；32 位手机没有推理库，回到 push-pull 快速填充 */
+        private fun localErase() {
+            if (!LocalModels.supported()) {
+                toast("这台手机不支持本地 AI 模型，改用快速消除")
+                return quick()
+            }
+            val mb = photo.maskBitmap() ?: return
+            withModel(LocalModels.MIGAN) { model ->
+                busy("正在消除…") {
+                    val base = pending ?: current!!
+                    val r = withContext(Dispatchers.Default) {
+                        val m = Cloud.alphaOf(ImageIO.scaled(mb, base.width, base.height))
+                        ImageIO.toBitmap(LocalAi.inpaint(model, ImageIO.pixels(base), base.width, base.height, m), base.width, base.height)
+                    }
+                    show(r)
+                }
             }
         }
 
@@ -931,7 +1048,7 @@ class EditorActivity : AppCompatActivity() {
             }
         }
 
-        private fun ai() {
+        private fun cloudErase() {
             val mb = photo.maskBitmap() ?: return
             val cfg = Store.cloud() ?: return askConfigure()
             busy("AI 正在消除…\n通常需要 10～60 秒", cancellable = true) {
@@ -953,7 +1070,7 @@ class EditorActivity : AppCompatActivity() {
     private fun askConfigure() {
         MaterialAlertDialogBuilder(this)
             .setTitle("需要设置 AI 服务")
-            .setMessage("AI 功能使用你自己的 Google Gemini 或 OpenAI（及兼容接口）的 API Key，请先在设置里填写。")
+            .setMessage("云端 AI 功能使用你自己的 API Key（火山引擎、Gemini 或 OpenAI 兼容接口），请先在设置里填写。推荐火山引擎：国内直连，新用户有免费额度。")
             .setPositiveButton("去设置") { _, _ -> startActivity(Intent(this, SettingsActivity::class.java)) }
             .setNegativeButton("取消", null)
             .show()
@@ -969,18 +1086,28 @@ class EditorActivity : AppCompatActivity() {
         /** 已经配置好服务时的面板内容 */
         abstract fun cloudPanel(): List<View>
 
+        /** false：没配置云端服务也能用（有本地模式），照常显示面板 */
+        open val needsCloud = true
+
         final override fun panel(): View {
             val cfg = Store.cloud()
-            if (cfg == null) {
+            if (cfg == null && needsCloud) {
                 built = false
                 return column(
-                    hint(intro + "需要先在设置里填写 Gemini 或 OpenAI 的 API Key。"),
+                    hint(intro + "需要先在设置里填写 API Key（推荐火山引擎，国内直连，新用户有免费额度）。"),
                     button("去设置", primary = true) { startActivity(Intent(this@EditorActivity, SettingsActivity::class.java)) },
                 )
             }
-            built = true
-            val views = cloudPanel() + hint("照片会发送到 ${Store.providerName(cfg.provider)}（${cfg.model}），可在设置里更改").apply { setPadding(0, dp(4), 0, 0) }
-            return column(*views.toTypedArray())
+            built = cfg != null
+            val tail = if (cfg != null) listOf(hint(cloudNote(cfg)).apply { setPadding(0, dp(4), 0, 0) }) else emptyList()
+            return column(*(cloudPanel() + tail).toTypedArray())
+        }
+
+        open fun cloudNote(cfg: Store.Cloud) = "照片会发送到 ${Store.providerName(cfg.provider)}（${cfg.model}），可在设置里更改"
+
+        protected fun rebuild() {
+            panel.removeAllViews()
+            panel.addView(panel())
         }
 
         /** 从设置页回来：可能刚填好 Key，重建面板 */
@@ -1082,14 +1209,18 @@ class EditorActivity : AppCompatActivity() {
     /**
      * 「选一张参考照」的格子：点开系统照片选择器，选好显示缩略图。[onChange] 收到读好的图（长边 1024）。
      */
-    private fun refSlot(label: String, onChange: (Bitmap) -> Unit): View {
+    private fun refSlot(label: String, initial: Bitmap? = null, onChange: (Bitmap) -> Unit): View {
         val thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setImageResource(R.drawable.ic_image)
-            setColorFilter(ContextCompat.getColor(context, R.color.ed_text2))
-            setPadding(dp(18), dp(18), dp(18), dp(18))
             setBackgroundResource(R.drawable.bg_card_dark)
             clipToOutline = true
+            if (initial != null) {
+                setImageBitmap(initial)
+            } else {
+                setImageResource(R.drawable.ic_image)
+                setColorFilter(ContextCompat.getColor(context, R.color.ed_text2))
+                setPadding(dp(18), dp(18), dp(18), dp(18))
+            }
         }
         val text = TextView(this).apply {
             this.text = label
@@ -1122,6 +1253,11 @@ class EditorActivity : AppCompatActivity() {
 
     private inner class FaceTool : CloudTool("换脸", "「换脸」把另一张照片里的脸换到这张照片的人物上，由云端图像模型完成。") {
         private var face: Bitmap? = null
+        private var cloudMode = false
+        override val needsCloud = false
+
+        override fun cloudNote(cfg: Store.Cloud) =
+            if (cloudMode) super.cloudNote(cfg) else "本地换脸在手机上完成，照片不会上传；正脸、角度相近的两张照片效果最好"
 
         override fun enter() {
             if (Store.faceConsent) return
@@ -1136,9 +1272,14 @@ class EditorActivity : AppCompatActivity() {
 
         override fun cloudPanel(): List<View> {
             val go = button("开始换脸", primary = true) { go() }
+            val (modeRow, _) = chipRow(listOf("本地（免费）", "云端 AI（效果更好）"), if (cloudMode) 1 else 0) {
+                cloudMode = it == 1
+                rebuild()
+            }
             return listOf(
-                hint("选一张正脸清楚的照片，把它的脸换到当前照片的人物上，保留当前照片的发型、表情、姿势和光线"),
-                refSlot("选择提供脸的照片") { face = it },
+                modeRow,
+                hint("选一张正脸清楚的照片，把它的脸换到当前照片的人物上，保留当前照片的发型、表情、姿势和光线").apply { setPadding(0, dp(6), 0, dp(2)) },
+                refSlot(if (face == null) "选择提供脸的照片" else "已选择，点这里换一张", face) { face = it },
                 LinearLayout(this@EditorActivity).apply {
                     gravity = Gravity.END
                     addView(go)
@@ -1148,7 +1289,21 @@ class EditorActivity : AppCompatActivity() {
 
         private fun go() {
             val f = face ?: return toast("先选一张提供脸的照片")
-            generate("AI 正在换脸…") { cfg -> Cloud.compose(cfg, current!!, f, CloudProtocol.FACE_SWAP_PROMPT) }
+            if (cloudMode) {
+                generate("AI 正在换脸…") { cfg -> Cloud.compose(cfg, current!!, f, CloudProtocol.FACE_SWAP_PROMPT) }
+                return
+            }
+            busy("正在换脸…") {
+                val r = try {
+                    FaceMesh.swap(current!!, f)
+                } catch (e: FaceMesh.NoFace) {
+                    alert("没法换脸", e.message ?: "")
+                    return@busy
+                }
+                result = r
+                photo.setImage(withContext(Dispatchers.Default) { ImageIO.fit(r, PREVIEW_SIDE) })
+                flashInfo("满意就点 ✓；效果不理想可以试试云端 AI", 4000)
+            }
         }
     }
 

@@ -191,14 +191,22 @@ object AppUpdate {
      * and the bytes already there are hashed first so the check still covers the whole file. A mirror that ignores
      * the range answers 200 with the whole file, which then simply starts over.
      */
-    suspend fun download(context: Context, info: Info, onProgress: (done: Long, total: Long) -> Unit): File =
+    suspend fun download(context: Context, info: Info, onProgress: (done: Long, total: Long) -> Unit): File {
+        val dir = updatesDir(context)
+        val part = File(dir, "app-${info.code}.apk.part")
+        val file = File(dir, "app-${info.code}.apk")
+        withContext(Dispatchers.IO) { dir.listFiles()?.forEach { if (it != part) it.delete() } } // other versions, or a copy that failed its check
+        return downloadVerified(info.url, info.sha256, info.size, part, file, onProgress)
+    }
+
+    /**
+     * 从 [url]（gh-proxy 地址时同时问各个镜像，用最先回应的）下载到 [file]，按 [sha256] 校验整个文件。中断留下的 [part]
+     * 下次用 Range 续传。本地模型下载也用它（见 LocalModels）。
+     */
+    suspend fun downloadVerified(url: String, sha256: String, size: Long, part: File, file: File, onProgress: (done: Long, total: Long) -> Unit): File =
         withContext(Dispatchers.IO) {
-            val dir = updatesDir(context)
-            val part = File(dir, "app-${info.code}.apk.part")
-            val file = File(dir, "app-${info.code}.apk")
-            dir.listFiles()?.forEach { if (it != part) it.delete() } // other versions, or a copy that failed its check
             var have = part.length()
-            if (info.size in 1..have) {
+            if (size in 1..have) {
                 part.delete() // at least as big as the whole file: not a usable remainder
                 have = 0
             }
@@ -215,12 +223,12 @@ object AppUpdate {
             val client = Http.client.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
             val headers = if (have > 0) mapOf("Range" to "bytes=$have-") else emptyMap()
             val response = try {
-                openFirst(mirrorsOf(info.url), client, headers)
+                openFirst(mirrorsOf(url), client, headers)
             } catch (e: IllegalStateException) {
                 // 416: no mirror can continue from here (the remainder is not of this file): start over without it.
                 if (have > 0 && e.message?.contains("416") == true) {
                     part.delete()
-                    return@withContext download(context, info, onProgress)
+                    return@withContext downloadVerified(url, sha256, size, part, file, onProgress)
                 }
                 throw e
             }
@@ -233,7 +241,7 @@ object AppUpdate {
                     digest.reset()
                     have = 0
                 }
-                val total = body.contentLength().takeIf { it > 0 }?.let { it + have } ?: info.size
+                val total = body.contentLength().takeIf { it > 0 }?.let { it + have } ?: size
                 body.byteStream().use { input ->
                     java.io.FileOutputStream(part, resuming).use { out ->
                         var done = have
@@ -250,12 +258,13 @@ object AppUpdate {
                     }
                 }
                 val hex = digest.digest().joinToString("") { "%02x".format(it) }
-                if (info.sha256.isNotEmpty() && hex != info.sha256) {
+                if (sha256.isNotEmpty() && hex != sha256) {
                     part.delete()
                     error("校验失败：下载的文件和发布信息对不上，已丢弃")
                 }
             }
-            if (!part.renameTo(file)) error("保存更新文件失败")
+            file.delete()
+            if (!part.renameTo(file)) error("保存下载的文件失败")
             file
         }
 

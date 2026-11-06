@@ -13,15 +13,27 @@ object Store {
 
     class Cloud(val provider: String, val key: String, val base: String, val model: String)
 
-    fun defaultBase(provider: String) =
-        if (provider == CloudProtocol.OPENAI) "https://api.openai.com/v1" else "https://generativelanguage.googleapis.com"
+    fun defaultBase(provider: String) = when (provider) {
+        CloudProtocol.OPENAI -> "https://api.openai.com/v1"
+        CloudProtocol.GEMINI -> "https://generativelanguage.googleapis.com"
+        else -> "https://ark.cn-beijing.volces.com/api/v3"
+    }
 
-    fun defaultModel(provider: String) = if (provider == CloudProtocol.OPENAI) "gpt-image-1" else "gemini-2.5-flash-image"
+    fun defaultModel(provider: String) = when (provider) {
+        CloudProtocol.OPENAI -> "gpt-image-1"
+        CloudProtocol.GEMINI -> "gemini-2.5-flash-image"
+        else -> "doubao-seedream-4-0-250828"
+    }
 
-    fun providerName(provider: String) = if (provider == CloudProtocol.OPENAI) "OpenAI 兼容接口" else "Google Gemini"
+    fun providerName(provider: String) = when (provider) {
+        CloudProtocol.OPENAI -> "OpenAI 兼容接口"
+        CloudProtocol.GEMINI -> "Google Gemini"
+        else -> "火山引擎 豆包 Seedream"
+    }
 
+    /** 默认火山引擎：国内直连，新用户有免费额度 */
     var provider: String
-        get() = p.getString("provider", CloudProtocol.GEMINI) ?: CloudProtocol.GEMINI
+        get() = p.getString("provider", CloudProtocol.SEEDREAM) ?: CloudProtocol.SEEDREAM
         set(v) = p.edit().putString("provider", v).apply()
 
     fun key(provider: String) = p.getString("key_$provider", "").orEmpty()

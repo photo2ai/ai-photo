@@ -41,6 +41,9 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // ONNX Runtime 只打 arm64（压缩后约 13MB；armv7 再加 11.6MB 不值得）。32 位手机上本地 AI 消除 / 变清晰不可用，
+            // 会提示并回到快速消除，见 LocalModels.supported
+            excludes += ['lib/armeabi-v7a/libonnxruntime.so', 'lib/armeabi-v7a/libonnxruntime4j_jni.so']
         }
     }
 
@@ -61,8 +64,14 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
     // 人像分割：模型随包打入，不依赖 Google Play 服务
     implementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
+    // 本地换脸用的人脸网格（468 个点 + 三角剖分），和人像分割共用 ML Kit 的运行库
+    implementation 'com.google.mlkit:face-mesh-detection:16.0.0-beta3'
+    // 本地 AI 消除（MI-GAN）和变清晰（Real-ESRGAN）的推理。模型按需下载，见 LocalModels
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.31.1'
 
     testImplementation 'junit:junit:4.13.2'
     // Android 自带的 org.json 在单测里是空壳，用真的实现跑 JSON 解析
     testImplementation 'org.json:json:20240303'
+    // 桌面版 ONNX Runtime：单测里直接跑模型，核对输入输出格式
+    testImplementation 'com.microsoft.onnxruntime:onnxruntime:1.31.1'
 }

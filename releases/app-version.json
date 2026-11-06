@@ -1,9 +1,9 @@
 {
-  "versionCode": 2,
-  "versionName": "1.0.1",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.1.apk",
-  "sha256": "1445fc1eef4d48be90349823fc445db0a44a94b1e48e7c5387a8a678038d92dd",
-  "size": 12649538,
-  "notes": "新增 AI 换脸、AI 换装（照衣服照片换，或选西装、汉服、婚纱等预设）；首页改版，新增证件照入口；安装更新前校验安装包签名。",
+  "versionCode": 3,
+  "versionName": "1.0.2",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.2.apk",
+  "sha256": "2d1c5bb12588d49136ef80beb56559702351895f1580ffa2c771056a1f761cd7",
+  "size": 28415965,
+  "notes": "新增：本地 AI 消除（免费离线，效果比快速消除好很多）、变清晰（本地 AI 放大 2 / 4 倍）、本地换脸（免费）；云端默认改为火山引擎豆包 Seedream（国内直连，新用户有免费额度）；首页常用工具改为五列。本地模型第一次使用时下载。",
   "force": false
 }

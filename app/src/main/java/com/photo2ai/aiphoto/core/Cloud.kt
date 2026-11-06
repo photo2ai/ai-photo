@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
 /**
- * 云端 AI 修图：用户自己的 Gemini 或 OpenAI 兼容接口。照片缩到长边 1536 再上传。
+ * 云端 AI 修图：用户自己的火山引擎 Seedream、Gemini 或 OpenAI 兼容接口。照片缩到长边 1536 再上传。
  */
 object Cloud {
     private const val UPLOAD_SIDE = 1536
@@ -38,6 +38,7 @@ object Cloud {
         val img = ImageIO.fit(src, UPLOAD_SIDE)
         val bytes = when (cfg.provider) {
             CloudProtocol.OPENAI -> openAi(cfg, listOf(img), prompt, null)
+            CloudProtocol.SEEDREAM -> seedream(cfg, listOf(img), if (wrap) CloudProtocol.editPrompt(prompt) else prompt)
             else -> gemini(cfg, listOf(img), if (wrap) CloudProtocol.editPrompt(prompt) else prompt)
         }
         decode(bytes)
@@ -51,6 +52,7 @@ object Cloud {
         val r = ImageIO.fit(ref, 1024)
         val bytes = when (cfg.provider) {
             CloudProtocol.OPENAI -> openAi(cfg, listOf(img, r), prompt, null)
+            CloudProtocol.SEEDREAM -> seedream(cfg, listOf(img, r), prompt)
             else -> gemini(cfg, listOf(img, r), prompt)
         }
         decode(bytes)
@@ -65,6 +67,7 @@ object Cloud {
         val m = ImageIO.scaled(mask, img.width, img.height)
         val bytes = when (cfg.provider) {
             CloudProtocol.OPENAI -> openAi(cfg, listOf(img), CloudProtocol.ERASE_PROMPT_MASK, openAiMask(m))
+            CloudProtocol.SEEDREAM -> seedream(cfg, listOf(marked(img, m)), CloudProtocol.ERASE_PROMPT_MARKED)
             else -> gemini(cfg, listOf(marked(img, m)), CloudProtocol.ERASE_PROMPT_MARKED)
         }
         val result = ImageIO.scaled(decode(bytes), src.width, src.height)
@@ -86,6 +89,20 @@ object Cloud {
         return CloudProtocol.parseGemini(send(req))
     }
 
+    /** Seedream：JSON 请求，图片内联成 data URI，输出尺寸和第一张图同比例 */
+    private suspend fun seedream(cfg: Store.Cloud, imgs: List<Bitmap>, prompt: String): ByteArray {
+        val body = CloudProtocol.seedreamBody(
+            cfg.model, prompt, imgs.map { ImageIO.encode(it, png = false, quality = 92) }, CloudProtocol.seedreamSize(imgs[0].width, imgs[0].height),
+        )
+        val req = Request.Builder()
+            .url(CloudProtocol.seedreamUrl(cfg.base))
+            .header("Authorization", "Bearer " + cfg.key)
+            .header("User-Agent", Http.UA)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+        return fetchResult(CloudProtocol.parseOpenAi(send(req)))
+    }
+
     /** 一张图用 image 字段；多张图用重复的 image[] 字段（gpt-image-1 支持多图参考） */
     private suspend fun openAi(cfg: Store.Cloud, imgs: List<Bitmap>, prompt: String, mask: ByteArray?): ByteArray {
         val png = "image/png".toMediaType()
@@ -101,7 +118,12 @@ object Cloud {
             .header("User-Agent", Http.UA)
             .post(form.build())
             .build()
-        val (bytes, url) = CloudProtocol.parseOpenAi(send(req))
+        return fetchResult(CloudProtocol.parseOpenAi(send(req)))
+    }
+
+    /** 结果是图片字节就直接用，是地址就下载 */
+    private suspend fun fetchResult(r: Pair<ByteArray?, String?>): ByteArray {
+        val (bytes, url) = r
         if (bytes != null) return bytes
         return withContext(Dispatchers.IO) {
             client.newCall(Request.Builder().url(url!!).build()).await().use { r ->

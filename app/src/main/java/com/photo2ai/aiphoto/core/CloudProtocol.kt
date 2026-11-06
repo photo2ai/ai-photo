@@ -12,6 +12,9 @@ object CloudProtocol {
     const val GEMINI = "gemini"
     const val OPENAI = "openai"
 
+    /** 火山引擎方舟的豆包 Seedream（国内直连，新用户有免费额度） */
+    const val SEEDREAM = "seedream"
+
     /** 用户的描述外面包一层：要求只改说到的地方，保持构图 */
     fun editPrompt(user: String) =
         "Edit this photo as follows: ${user.trim()}\n" +
@@ -106,9 +109,42 @@ object CloudProtocol {
         )
     }
 
+    fun seedreamUrl(base: String) = base.trim().trimEnd('/') + "/images/generations"
+
+    /**
+     * Seedream 的输出尺寸：和输入同比例、总像素约 2048×2048，边长取 8 的倍数。
+     * 接口要求总像素在 1280×720 到 4096×4096 之间、宽高比在 1/16 到 16 之间。
+     */
+    fun seedreamSize(w: Int, h: Int): String {
+        val aspect = (w.toDouble() / h).coerceIn(1.0 / 16, 16.0)
+        val area = 2048.0 * 2048.0
+        var ow = Math.sqrt(area * aspect)
+        var oh = area / ow
+        val s = minOf(1.0, 4096.0 / ow, 4096.0 / oh)
+        ow *= s
+        oh *= s
+        val rw = maxOf(8, (ow / 8).toInt() * 8)
+        val rh = maxOf(8, (oh / 8).toInt() * 8)
+        return "${rw}x$rh"
+    }
+
+    /** 图片用 data URI 内联；一张时 image 是字符串，多张时是数组（按顺序就是提示词里的 image 1、image 2） */
+    fun seedreamBody(model: String, prompt: String, jpegs: List<ByteArray>, size: String): String {
+        val uris = jpegs.map { "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(it) }
+        return JSONObject()
+            .put("model", model.trim())
+            .put("prompt", prompt)
+            .put("image", if (uris.size == 1) uris[0] else JSONArray(uris))
+            .put("size", size)
+            .put("sequential_image_generation", "disabled")
+            .put("response_format", "b64_json")
+            .put("watermark", false)
+            .toString()
+    }
+
     fun openAiUrl(base: String) = base.trim().trimEnd('/') + "/images/edits"
 
-    /** OpenAI images/edits：返回 (图片字节, null) 或 (null, 图片地址) */
+    /** OpenAI images/edits 和 Seedream（返回格式相同）：返回 (图片字节, null) 或 (null, 图片地址) */
     fun parseOpenAi(json: String): Pair<ByteArray?, String?> {
         val o = parse(json)
         errorMessage(o)?.let { throw Failure(it) }

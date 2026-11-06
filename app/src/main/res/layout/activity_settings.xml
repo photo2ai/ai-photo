@@ -46,7 +46,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="AI 服务（AI 修图、消除、换脸、换装用）"
+                android:text="云端 AI 服务（AI 修图、云端消除、换脸、换装用）"
                 android:textColor="@color/accent" />
 
             <com.google.android.material.button.MaterialButtonToggleGroup
@@ -59,12 +59,22 @@
                 app:singleSelection="true">
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/providerSeedream"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:paddingHorizontal="4dp"
+                    android:text="火山引擎" />
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/providerGemini"
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Google Gemini" />
+                    android:paddingHorizontal="4dp"
+                    android:text="Gemini" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/providerOpenai"
@@ -72,6 +82,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:paddingHorizontal="4dp"
                     android:text="OpenAI 兼容" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
@@ -147,7 +158,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:lineSpacingExtra="3dp"
-                android:text="智能增强、调整、滤镜、裁剪、人像抠图和快速消除都在手机上完成，照片不会离开手机。\n「AI 修图」「AI 消除」「换脸」「换装」会把照片（缩小到长边 1536 像素，参考照片 1024 像素）发送到上面配置的服务，由你自己的账号计费。API Key 只保存在本机，不进系统备份。"
+                android:text="智能增强、变清晰、调整、滤镜、裁剪、人像抠图、本地消除和本地换脸都在手机上完成，照片不会离开手机（本地模型第一次使用时下载）。\n「AI 修图」「云端消除」「云端换脸」「换装」会把照片（缩小到长边 1536 像素，参考照片 1024 像素）发送到上面配置的服务，由你自己的账号计费。API Key 只保存在本机，不进系统备份。"
                 android:textColor="@color/text2"
                 android:textSize="13sp" />
 

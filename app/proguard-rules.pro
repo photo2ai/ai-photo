@@ -8,3 +8,6 @@
 -keep class com.google.mlkit.** { *; }
 -keep class com.google.android.gms.internal.mlkit_** { *; }
 -keep class com.google.firebase.components.** { *; }
+
+# ONNX Runtime：原生库通过 JNI 按类名、方法名回调 Java 类（OnnxTensor、OrtSession 等），混淆或删掉就会崩
+-keep class ai.onnxruntime.** { *; }

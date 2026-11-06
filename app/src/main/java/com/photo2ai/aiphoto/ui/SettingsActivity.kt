@@ -28,12 +28,16 @@ class SettingsActivity : AppCompatActivity() {
 
         val group = findViewById<MaterialButtonToggleGroup>(R.id.provider)
         shown = Store.provider
-        group.check(if (shown == CloudProtocol.OPENAI) R.id.providerOpenai else R.id.providerGemini)
+        group.check(idOf(shown))
         load()
         group.addOnButtonCheckedListener { _, id, checked ->
             if (!checked) return@addOnButtonCheckedListener
             save()
-            shown = if (id == R.id.providerOpenai) CloudProtocol.OPENAI else CloudProtocol.GEMINI
+            shown = when (id) {
+                R.id.providerOpenai -> CloudProtocol.OPENAI
+                R.id.providerGemini -> CloudProtocol.GEMINI
+                else -> CloudProtocol.SEEDREAM
+            }
             Store.provider = shown
             load()
         }
@@ -49,11 +53,21 @@ class SettingsActivity : AppCompatActivity() {
         model.setText(Store.rawModel(shown))
         findViewById<TextInputLayout>(R.id.baseLayout).placeholderText = Store.defaultBase(shown)
         findViewById<TextInputLayout>(R.id.modelLayout).placeholderText = Store.defaultModel(shown)
-        findViewById<TextView>(R.id.providerHelp).text = if (shown == CloudProtocol.OPENAI) {
-            "默认模型 ${Store.defaultModel(shown)}，调用 /images/edits 接口；兼容这个接口的第三方服务（中转、自建）把地址改成它的 …/v1 即可。"
-        } else {
-            "默认模型 ${Store.defaultModel(shown)}（可以换成更新的图片模型），Key 在 Google AI Studio 申请。用代理或中转时把接口地址改成它的地址。"
+        findViewById<TextView>(R.id.providerHelp).text = when (shown) {
+            CloudProtocol.OPENAI ->
+                "默认模型 ${Store.defaultModel(shown)}，调用 /images/edits 接口；兼容这个接口的第三方服务（中转、自建）把地址改成它的 …/v1 即可。"
+            CloudProtocol.GEMINI ->
+                "默认模型 ${Store.defaultModel(shown)}（可以换成更新的图片模型），Key 在 Google AI Studio 申请。国内需要代理，或把接口地址改成中转地址。"
+            else ->
+                "国内直连。Key 在火山方舟控制台「API Key 管理」里创建，开通 Seedream 模型后新用户有免费额度（以控制台为准），之后按张计费。" +
+                    "默认模型 ${Store.defaultModel(shown)}，也可以填其它已开通的 Seedream 版本或推理接入点 ID（ep-…）。"
         }
+    }
+
+    private fun idOf(provider: String) = when (provider) {
+        CloudProtocol.OPENAI -> R.id.providerOpenai
+        CloudProtocol.GEMINI -> R.id.providerGemini
+        else -> R.id.providerSeedream
     }
 
     private fun save() {

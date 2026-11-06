@@ -42,10 +42,12 @@ class MainActivity : AppCompatActivity() {
 
     private val tiles = listOf(
         Tile(EditorActivity.TOOL_ENHANCE, R.drawable.ic_magic, "智能增强", 0xFFFF8A3D.toInt()),
-        Tile(EditorActivity.TOOL_CUTOUT, R.drawable.ic_person, "人像抠图", 0xFF3D8BFF.toInt()),
-        Tile(EditorActivity.TOOL_CUTOUT, R.drawable.ic_idphoto, "证件照", 0xFF22B8A7.toInt(), effect = "WHITE"),
-        Tile(EditorActivity.TOOL_AI, R.drawable.ic_sparkle, "AI 修图", 0xFF9B5CFF.toInt()),
+        Tile(EditorActivity.TOOL_UPSCALE, R.drawable.ic_hd, "变清晰", 0xFF3D8BFF.toInt()),
         Tile(EditorActivity.TOOL_ERASE, R.drawable.ic_eraser, "消除笔", 0xFF2FB862.toInt()),
+        Tile(EditorActivity.TOOL_CUTOUT, R.drawable.ic_person, "人像抠图", 0xFF7B61FF.toInt()),
+        Tile(EditorActivity.TOOL_CUTOUT, R.drawable.ic_idphoto, "证件照", 0xFF22B8A7.toInt(), effect = "WHITE"),
+        Tile(EditorActivity.TOOL_CUTOUT, R.drawable.ic_bokeh, "背景虚化", 0xFF5AA9FF.toInt(), effect = "BLUR"),
+        Tile(EditorActivity.TOOL_AI, R.drawable.ic_sparkle, "AI 修图", 0xFF9B5CFF.toInt()),
         Tile(EditorActivity.TOOL_ADJUST, R.drawable.ic_tune, "调色", 0xFFF5A623.toInt()),
         Tile(EditorActivity.TOOL_FILTER, R.drawable.ic_filter, "滤镜", 0xFFFF4D80.toInt()),
         Tile(EditorActivity.TOOL_CROP, R.drawable.ic_crop, "裁剪", 0xFF3BB4F2.toInt()),
@@ -122,15 +124,15 @@ class MainActivity : AppCompatActivity() {
                 addView(ImageView(context).apply {
                     setImageResource(t.icon)
                     setColorFilter(t.color)
-                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
                     background = GradientDrawable().apply {
                         shape = GradientDrawable.OVAL
                         setColor((t.color and 0xFFFFFF) or 0x24000000)
                     }
-                }, LinearLayout.LayoutParams(dp(50), dp(50)))
+                }, LinearLayout.LayoutParams(dp(44), dp(44)))
                 addView(TextView(context).apply {
                     text = t.title
-                    textSize = 13f
+                    textSize = 12f
                     gravity = Gravity.CENTER
                     setTextColor(ContextCompat.getColor(context, R.color.text))
                     setPadding(0, dp(8), 0, 0)
