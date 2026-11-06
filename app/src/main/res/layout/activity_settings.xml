@@ -46,7 +46,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="AI 服务（「AI 修图」「AI 消除」用）"
+                android:text="AI 服务（AI 修图、消除、换脸、换装用）"
                 android:textColor="@color/accent" />
 
             <com.google.android.material.button.MaterialButtonToggleGroup
@@ -147,7 +147,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:lineSpacingExtra="3dp"
-                android:text="智能增强、调整、滤镜、裁剪、人像抠图和快速消除都在手机上完成，照片不会离开手机。\n「AI 修图」和「AI 消除」会把照片（缩小到长边 1536 像素）发送到上面配置的服务，由你自己的账号计费。API Key 只保存在本机，不进系统备份。"
+                android:text="智能增强、调整、滤镜、裁剪、人像抠图和快速消除都在手机上完成，照片不会离开手机。\n「AI 修图」「AI 消除」「换脸」「换装」会把照片（缩小到长边 1536 像素，参考照片 1024 像素）发送到上面配置的服务，由你自己的账号计费。API Key 只保存在本机，不进系统备份。"
                 android:textColor="@color/text2"
                 android:textSize="13sp" />
 

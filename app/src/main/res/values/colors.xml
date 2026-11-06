@@ -1,12 +1,22 @@
 <resources>
-    <color name="bg">#0E0E11</color>
-    <color name="surface">#18181D</color>
-    <color name="surface2">#23232A</color>
-    <color name="line">#2E2E36</color>
-    <color name="text">#EEEEF3</color>
-    <color name="text2">#9B9BA8</color>
-    <color name="accent">#B3A4FF</color>
-    <color name="accent_dark">#2A2150</color>
-    <color name="on_accent">#170E3D</color>
-    <color name="warm">#FFC48A</color>
+    <!-- 首页、设置：浅色 -->
+    <color name="bg">#F5F6FA</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface2">#F0F1F5</color>
+    <color name="line">#E8E9EE</color>
+    <color name="text">#1F2329</color>
+    <color name="text2">#8A8F99</color>
+    <!-- 主色：粉红 -->
+    <color name="accent">#FF4D80</color>
+    <color name="accent2">#FF7A59</color>
+    <color name="accent_soft">#FFE3EC</color>
+    <color name="on_accent">#FFFFFF</color>
+    <!-- 编辑页：深色，突出照片 -->
+    <color name="ed_bg">#0E0E11</color>
+    <color name="ed_surface">#18181D</color>
+    <color name="ed_surface2">#26262D</color>
+    <color name="ed_line">#2E2E36</color>
+    <color name="ed_text">#EEEEF3</color>
+    <color name="ed_text2">#9B9BA8</color>
+    <color name="ed_accent_soft">#4A1E2E</color>
 </resources>

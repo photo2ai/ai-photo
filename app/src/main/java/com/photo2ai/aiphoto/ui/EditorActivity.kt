@@ -25,6 +25,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -63,6 +64,9 @@ import kotlin.math.roundToInt
 class EditorActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_TOOL = "tool"
+
+        /** 抠图工具一打开就选中的效果（Segment.Effect 的名字），首页「证件照」用 */
+        const val EXTRA_EFFECT = "effect"
         const val TOOL_ENHANCE = "enhance"
         const val TOOL_AI = "ai"
         const val TOOL_ERASE = "erase"
@@ -70,6 +74,8 @@ class EditorActivity : AppCompatActivity() {
         const val TOOL_ADJUST = "adjust"
         const val TOOL_FILTER = "filter"
         const val TOOL_CROP = "crop"
+        const val TOOL_FACE = "face"
+        const val TOOL_OUTFIT = "outfit"
 
         /** 预览图（显示、实时预览都用它）的长边 */
         private const val PREVIEW_SIDE = 2048
@@ -353,6 +359,8 @@ class EditorActivity : AppCompatActivity() {
     private val toolDefs = listOf(
         ToolDef(TOOL_ENHANCE, R.drawable.ic_magic, "智能增强"),
         ToolDef(TOOL_AI, R.drawable.ic_sparkle, "AI 修图"),
+        ToolDef(TOOL_FACE, R.drawable.ic_face, "换脸"),
+        ToolDef(TOOL_OUTFIT, R.drawable.ic_shirt, "换装"),
         ToolDef(TOOL_ERASE, R.drawable.ic_eraser, "消除"),
         ToolDef(TOOL_CUTOUT, R.drawable.ic_person, "抠图"),
         ToolDef(TOOL_ADJUST, R.drawable.ic_tune, "调整"),
@@ -373,12 +381,12 @@ class EditorActivity : AppCompatActivity() {
                 setOnClickListener { openTool(d.id) }
                 addView(ImageView(context).apply {
                     setImageResource(d.icon)
-                    if (d.id == TOOL_AI) setColorFilter(ContextCompat.getColor(context, R.color.accent))
+                    if (d.id == TOOL_AI || d.id == TOOL_FACE || d.id == TOOL_OUTFIT) setColorFilter(ContextCompat.getColor(context, R.color.accent))
                 }, LinearLayout.LayoutParams(dp(26), dp(26)))
                 addView(TextView(context).apply {
                     text = d.label
                     textSize = 12f
-                    setTextColor(ContextCompat.getColor(context, R.color.text))
+                    setTextColor(ContextCompat.getColor(context, R.color.ed_text))
                     setPadding(0, dp(6), 0, 0)
                 })
             })
@@ -395,6 +403,8 @@ class EditorActivity : AppCompatActivity() {
             TOOL_ADJUST -> AdjustTool()
             TOOL_FILTER -> FilterTool()
             TOOL_CROP -> CropTool()
+            TOOL_FACE -> FaceTool()
+            TOOL_OUTFIT -> OutfitTool()
             else -> return
         }
         tool = t
@@ -492,7 +502,7 @@ class EditorActivity : AppCompatActivity() {
     private fun hint(text: String) = TextView(this).apply {
         this.text = text
         textSize = 12.5f
-        setTextColor(ContextCompat.getColor(context, R.color.text2))
+        setTextColor(ContextCompat.getColor(context, R.color.ed_text2))
         setPadding(0, 0, 0, dp(4))
     }
 
@@ -501,7 +511,7 @@ class EditorActivity : AppCompatActivity() {
         val valueText = TextView(this).apply {
             text = format(value)
             textSize = 13f
-            setTextColor(ContextCompat.getColor(context, R.color.text))
+            setTextColor(ContextCompat.getColor(context, R.color.ed_text))
             minWidth = dp(36)
             gravity = Gravity.END
         }
@@ -511,7 +521,8 @@ class EditorActivity : AppCompatActivity() {
             this.value = value
             stepSize = 1f
             isTickVisible = false
-            labelBehavior = LabelFormatter.LABEL_GONE
+            labelBehavior = LabelFormatter.LABEL_FLOATING
+            setLabelFormatter { format(it) }
             addOnChangeListener { _, v, fromUser ->
                 valueText.text = format(v)
                 if (fromUser) onChange(v)
@@ -522,7 +533,7 @@ class EditorActivity : AppCompatActivity() {
             addView(TextView(context).apply {
                 text = label
                 textSize = 13f
-                setTextColor(ContextCompat.getColor(context, R.color.text2))
+                setTextColor(ContextCompat.getColor(context, R.color.ed_text2))
                 minWidth = dp(40)
             })
             addView(slider, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -535,8 +546,8 @@ class EditorActivity : AppCompatActivity() {
         this.text = text
         isCheckable = true
         isCheckedIconVisible = false
-        val accent = ContextCompat.getColor(context, R.color.accent_dark)
-        val normal = ContextCompat.getColor(context, R.color.surface2)
+        val accent = ContextCompat.getColor(context, R.color.ed_accent_soft)
+        val normal = ContextCompat.getColor(context, R.color.ed_surface2)
         chipBackgroundColor = ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()), intArrayOf(accent, normal))
         chipStrokeWidth = 0f
         setEnsureMinTouchTargetSize(false)
@@ -729,7 +740,7 @@ class EditorActivity : AppCompatActivity() {
         private fun highlight() {
             items.forEachIndexed { i, v ->
                 val label = (v as LinearLayout).getChildAt(1) as TextView
-                label.setTextColor(ContextCompat.getColor(this@EditorActivity, if (i == selected) R.color.accent else R.color.text2))
+                label.setTextColor(ContextCompat.getColor(this@EditorActivity, if (i == selected) R.color.accent else R.color.ed_text2))
                 v.getChildAt(0).alpha = if (i == selected) 1f else 0.85f
             }
         }
@@ -817,13 +828,16 @@ class EditorActivity : AppCompatActivity() {
 
     private inner class CutoutTool : Tool("人像抠图") {
         private var mask: Segment.Mask? = null
-        private var effect = Segment.Effect.BLUR
+        private var effect = intent.getStringExtra(EXTRA_EFFECT)
+            ?.let { name -> Segment.Effect.entries.firstOrNull { it.name == name } }
+            ?.also { intent.removeExtra(EXTRA_EFFECT) } // 只在第一次打开时生效
+            ?: Segment.Effect.BLUR
         private var blur = 0.5f
         private lateinit var blurRow: View
 
         override fun panel(): View {
             val effects = Segment.Effect.entries
-            val (row, _) = chipRow(effects.map { it.label }, 0) {
+            val (row, _) = chipRow(effects.map { it.label }, effects.indexOf(effect)) {
                 effect = effects[it]
                 blurRow.visibility = if (effect == Segment.Effect.BLUR) View.VISIBLE else View.INVISIBLE
                 refresh()
@@ -833,6 +847,7 @@ class EditorActivity : AppCompatActivity() {
                 refresh()
             }
             blurRow = bRow
+            if (effect != Segment.Effect.BLUR) bRow.visibility = View.INVISIBLE
             return column(hint("识别照片里的人（本机运行），处理背景"), row, bRow)
         }
 
@@ -944,8 +959,90 @@ class EditorActivity : AppCompatActivity() {
             .show()
     }
 
-    private inner class AiTool : Tool("AI 修图") {
-        private var result: Bitmap? = null
+    /**
+     * 云端工具的公共部分：没配置 Key 时提示去设置（从设置页回来自动重建面板），生成时显示可取消的进度，结果先显示出来，点 ✓ 才采用。
+     */
+    private abstract inner class CloudTool(title: String, private val intro: String) : Tool(title) {
+        protected var result: Bitmap? = null
+        private var built = false
+
+        /** 已经配置好服务时的面板内容 */
+        abstract fun cloudPanel(): List<View>
+
+        final override fun panel(): View {
+            val cfg = Store.cloud()
+            if (cfg == null) {
+                built = false
+                return column(
+                    hint(intro + "需要先在设置里填写 Gemini 或 OpenAI 的 API Key。"),
+                    button("去设置", primary = true) { startActivity(Intent(this@EditorActivity, SettingsActivity::class.java)) },
+                )
+            }
+            built = true
+            val views = cloudPanel() + hint("照片会发送到 ${Store.providerName(cfg.provider)}（${cfg.model}），可在设置里更改").apply { setPadding(0, dp(4), 0, 0) }
+            return column(*views.toTypedArray())
+        }
+
+        /** 从设置页回来：可能刚填好 Key，重建面板 */
+        override fun onResume() {
+            if (!built && Store.cloud() != null) {
+                panel.removeAllViews()
+                panel.addView(panel())
+            }
+        }
+
+        protected fun generate(busyText: String, call: suspend (Store.Cloud) -> Bitmap) {
+            val cfg = Store.cloud() ?: return askConfigure()
+            hideKeyboard()
+            busy("$busyText\n通常需要 10～60 秒", cancellable = true) {
+                val r = call(cfg)
+                result = r
+                photo.setImage(withContext(Dispatchers.Default) { ImageIO.fit(r, PREVIEW_SIDE) })
+                flashInfo("结果 ${r.width} × ${r.height}，满意就点 ✓", 4000)
+            }
+        }
+
+        override suspend fun result(): Bitmap? = result
+
+        /** 一行可横向滑动的快捷标签，点了把文字填进输入框 */
+        protected fun presetRow(items: List<Pair<String, String>>, onPick: (String) -> Unit): View {
+            val group = LinearLayout(this@EditorActivity).apply { gravity = Gravity.CENTER_VERTICAL }
+            for ((label, text) in items) {
+                group.addView(Chip(this@EditorActivity).apply {
+                    this.text = label
+                    setEnsureMinTouchTargetSize(false)
+                    setOnClickListener { onPick(text) }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+            }
+            return HorizontalScrollView(this@EditorActivity).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(group)
+            }
+        }
+
+        /** 输入框 + 生成按钮；返回 (这一行, 输入框) */
+        protected fun promptRow(hintText: String, onGo: () -> Unit): Pair<View, TextInputEditText> {
+            val layout = TextInputLayout(this@EditorActivity, null, com.google.android.material.R.attr.textInputOutlinedStyle).apply {
+                hint = hintText
+            }
+            val edit = TextInputEditText(layout.context).apply {
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                maxLines = 3
+                textSize = 14f
+            }
+            layout.addView(edit)
+            val row = LinearLayout(this@EditorActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6), 0, 0)
+                addView(layout, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(View(context), LinearLayout.LayoutParams(dp(8), 1))
+                addView(button("生成", primary = true) { onGo() })
+            }
+            return row to edit
+        }
+    }
+
+    private inner class AiTool : CloudTool("AI 修图", "「AI 修图」用一句话描述想怎么改照片，由云端图像模型完成。") {
         private var input: TextInputEditText? = null
         private val presets = listOf(
             "画质增强" to "提高清晰度和细节，去除噪点和模糊，色彩自然真实",
@@ -958,79 +1055,137 @@ class EditorActivity : AppCompatActivity() {
             "去除反光" to "去掉眼镜和画面里的反光，其它保持不变",
         )
 
-        override fun panel(): View {
-            val cfg = Store.cloud()
-            if (cfg == null) {
-                return column(
-                    hint("「AI 修图」用一句话描述想怎么改照片，由云端图像模型完成。需要先在设置里填写 Gemini 或 OpenAI 的 API Key。"),
-                    button("去设置", primary = true) { startActivity(Intent(this@EditorActivity, SettingsActivity::class.java)) },
-                )
-            }
-            val group = LinearLayout(this@EditorActivity).apply { gravity = Gravity.CENTER_VERTICAL }
-            val recent = Store.recentPrompts().map { (if (it.length > 10) it.take(10) + "…" else it) to it }
-            for ((label, prompt) in recent.map { "↺ " + it.first to it.second } + presets) {
-                group.addView(Chip(this@EditorActivity).apply {
-                    text = label
-                    setEnsureMinTouchTargetSize(false)
-                    setOnClickListener {
-                        input?.setText(prompt)
-                        input?.setSelection(prompt.length)
-                    }
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
-            }
-            val scroll = HorizontalScrollView(this@EditorActivity).apply {
-                isHorizontalScrollBarEnabled = false
-                addView(group)
-            }
-            val layout = TextInputLayout(this@EditorActivity, null, com.google.android.material.R.attr.textInputOutlinedStyle).apply {
-                hint = "想怎么改？例如：把天空换成晚霞"
-            }
-            val edit = TextInputEditText(layout.context).apply {
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                maxLines = 3
-                textSize = 14f
-            }
+        override fun cloudPanel(): List<View> {
+            val recent = Store.recentPrompts().map { "↺ " + (if (it.length > 10) it.take(10) + "…" else it) to it }
+            val (row, edit) = promptRow("想怎么改？例如：把天空换成晚霞") { go() }
             input = edit
-            layout.addView(edit)
-            val row = LinearLayout(this@EditorActivity).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(6), 0, 0)
-                addView(layout, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(View(context), LinearLayout.LayoutParams(dp(8), 1))
-                addView(button("生成", primary = true) { generate() })
+            return listOf(presetRow(recent + presets) { edit.setText(it); edit.setSelection(it.length) }, row)
+        }
+
+        private fun go() {
+            val prompt = input?.text?.toString()?.trim().orEmpty()
+            if (prompt.isEmpty()) return toast("先写一句想怎么改")
+            Store.addRecentPrompt(prompt)
+            generate("AI 正在修图…") { cfg -> Cloud.edit(cfg, current!!, prompt) }
+        }
+    }
+
+    // ---------------------------------------------------------------- 参考照片（换脸、换装）
+
+    private var pickRef: ((Uri) -> Unit)? = null
+    private val refPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
+        val cb = pickRef
+        pickRef = null
+        if (uri != null) cb?.invoke(uri)
+    }
+
+    /**
+     * 「选一张参考照」的格子：点开系统照片选择器，选好显示缩略图。[onChange] 收到读好的图（长边 1024）。
+     */
+    private fun refSlot(label: String, onChange: (Bitmap) -> Unit): View {
+        val thumb = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setImageResource(R.drawable.ic_image)
+            setColorFilter(ContextCompat.getColor(context, R.color.ed_text2))
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            setBackgroundResource(R.drawable.bg_card_dark)
+            clipToOutline = true
+        }
+        val text = TextView(this).apply {
+            this.text = label
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.ed_text))
+            setPadding(dp(12), 0, 0, 0)
+        }
+        return LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+            isClickable = true
+            background = ContextCompat.getDrawable(context, android.R.drawable.list_selector_background)
+            addView(thumb, LinearLayout.LayoutParams(dp(64), dp(64)))
+            addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            setOnClickListener {
+                pickRef = { uri ->
+                    busy("正在读取照片…") {
+                        val b = withContext(Dispatchers.IO) { ImageIO.fit(ImageIO.decode(this@EditorActivity, uri), 1024) }
+                        thumb.setPadding(0, 0, 0, 0)
+                        thumb.clearColorFilter()
+                        thumb.setImageBitmap(b)
+                        text.text = "已选择，点这里换一张"
+                        onChange(b)
+                    }
+                }
+                refPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             }
-            return column(
-                scroll,
-                row,
-                hint("照片会发送到 ${Store.providerName(cfg.provider)}（${cfg.model}），可在设置里更改").apply { setPadding(0, dp(4), 0, 0) },
+        }
+    }
+
+    private inner class FaceTool : CloudTool("换脸", "「换脸」把另一张照片里的脸换到这张照片的人物上，由云端图像模型完成。") {
+        private var face: Bitmap? = null
+
+        override fun enter() {
+            if (Store.faceConsent) return
+            MaterialAlertDialogBuilder(this@EditorActivity)
+                .setTitle("使用前请确认")
+                .setMessage("换脸只用于你自己的照片，或已经得到照片中本人同意的照片。不要用它冒充他人、制作误导或侵犯他人权益的内容。\n\n照片会发送到你在设置里配置的 AI 服务，服务可能按自己的规则拒绝处理。")
+                .setPositiveButton("我已了解") { _, _ -> Store.faceConsent = true }
+                .setNegativeButton("不用了") { _, _ -> closeTool() }
+                .setCancelable(false)
+                .show()
+        }
+
+        override fun cloudPanel(): List<View> {
+            val go = button("开始换脸", primary = true) { go() }
+            return listOf(
+                hint("选一张正脸清楚的照片，把它的脸换到当前照片的人物上，保留当前照片的发型、表情、姿势和光线"),
+                refSlot("选择提供脸的照片") { face = it },
+                LinearLayout(this@EditorActivity).apply {
+                    gravity = Gravity.END
+                    addView(go)
+                },
             )
         }
 
-        /** 从设置页回来：可能刚填好 Key，重建面板 */
-        override fun onResume() {
-            if (input == null && Store.cloud() != null) {
-                panel.removeAllViews()
-                panel.addView(panel())
-            }
+        private fun go() {
+            val f = face ?: return toast("先选一张提供脸的照片")
+            generate("AI 正在换脸…") { cfg -> Cloud.compose(cfg, current!!, f, CloudProtocol.FACE_SWAP_PROMPT) }
+        }
+    }
+
+    private inner class OutfitTool : CloudTool("换装", "「换装」给照片里的人换衣服，可以照一张衣服的照片换，也可以直接说想穿什么，由云端图像模型完成。") {
+        private var cloth: Bitmap? = null
+        private var input: TextInputEditText? = null
+        private val presets = listOf(
+            "西装" to "合身的深色商务西装，白衬衫，系领带",
+            "职业装" to "简洁干练的职业套装",
+            "婚纱" to "白色蕾丝婚纱",
+            "汉服" to "淡雅的传统汉服",
+            "旗袍" to "精致的丝绸旗袍",
+            "晚礼服" to "优雅的黑色晚礼服",
+            "休闲装" to "白色 T 恤和蓝色牛仔裤",
+            "运动装" to "运动服和运动鞋",
+            "校服" to "日式学生校服",
+            "冬装" to "厚实的羊毛大衣和围巾",
+        )
+
+        override fun cloudPanel(): List<View> {
+            val (row, edit) = promptRow("想穿什么？选了衣服照片可以不填") { go() }
+            input = edit
+            return listOf(
+                refSlot("选择衣服的照片（可选）") { cloth = it },
+                presetRow(presets) { edit.setText(it); edit.setSelection(it.length) },
+                row,
+            )
         }
 
-        private fun generate() {
-            val prompt = input?.text?.toString()?.trim().orEmpty()
-            if (prompt.isEmpty()) {
-                toast("先写一句想怎么改")
-                return
-            }
-            val cfg = Store.cloud() ?: return askConfigure()
-            Store.addRecentPrompt(prompt)
-            hideKeyboard()
-            busy("AI 正在修图…\n通常需要 10～60 秒", cancellable = true) {
-                val r = Cloud.edit(cfg, current!!, prompt)
-                result = r
-                photo.setImage(withContext(Dispatchers.Default) { ImageIO.fit(r, PREVIEW_SIDE) })
-                flashInfo("结果 ${r.width} × ${r.height}，满意就点 ✓", 4000)
+        private fun go() {
+            val desc = input?.text?.toString()?.trim().orEmpty()
+            val ref = cloth
+            if (ref == null && desc.isEmpty()) return toast("选一张衣服的照片，或者写想穿什么")
+            val prompt = CloudProtocol.outfitPrompt(desc, hasRef = ref != null)
+            generate("AI 正在换装…") { cfg ->
+                if (ref != null) Cloud.compose(cfg, current!!, ref, prompt) else Cloud.edit(cfg, current!!, prompt, wrap = false)
             }
         }
-
-        override suspend fun result(): Bitmap? = result
     }
 }

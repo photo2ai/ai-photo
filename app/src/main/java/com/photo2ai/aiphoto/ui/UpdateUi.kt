@@ -12,6 +12,8 @@ import com.photo2ai.aiphoto.core.Store
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** 检查更新、下载、安装的界面部分 */
 object UpdateUi {
@@ -86,6 +88,10 @@ object UpdateUi {
                         }
                         text.text = Formatter.formatShortFileSize(a, done) + if (total > 0) " / " + Formatter.formatShortFileSize(a, total) else ""
                     }
+                }
+                withContext(Dispatchers.IO) { AppUpdate.verifyPackage(a, file) }?.let {
+                    file.delete()
+                    error(it)
                 }
                 dialog.dismiss()
                 install(a, file)

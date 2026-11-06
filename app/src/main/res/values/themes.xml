@@ -1,15 +1,16 @@
 <resources>
-    <style name="Theme.AiPhoto" parent="Theme.Material3.Dark.NoActionBar">
+    <!-- 首页、设置：浅色 -->
+    <style name="Theme.AiPhoto" parent="Theme.Material3.Light.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@color/on_accent</item>
-        <item name="colorPrimaryContainer">@color/accent_dark</item>
-        <item name="colorOnPrimaryContainer">@color/text</item>
+        <item name="colorPrimaryContainer">@color/accent_soft</item>
+        <item name="colorOnPrimaryContainer">@color/accent</item>
         <item name="colorSecondary">@color/accent</item>
-        <item name="colorSecondaryContainer">@color/accent_dark</item>
-        <item name="colorOnSecondaryContainer">@color/text</item>
+        <item name="colorSecondaryContainer">@color/accent_soft</item>
+        <item name="colorOnSecondaryContainer">@color/accent</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorSurfaceContainer">@color/surface</item>
-        <item name="colorSurfaceContainerHigh">@color/surface2</item>
+        <item name="colorSurfaceContainerHigh">@color/surface</item>
         <item name="colorSurfaceContainerHighest">@color/surface2</item>
         <item name="colorOnSurface">@color/text</item>
         <item name="colorOnSurfaceVariant">@color/text2</item>
@@ -19,6 +20,31 @@
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <!-- 编辑页：深色 -->
+    <style name="Theme.AiPhoto.Editor" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorPrimaryContainer">@color/ed_accent_soft</item>
+        <item name="colorOnPrimaryContainer">@color/ed_text</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorSecondaryContainer">@color/ed_accent_soft</item>
+        <item name="colorOnSecondaryContainer">@color/ed_text</item>
+        <item name="colorSurface">@color/ed_surface</item>
+        <item name="colorSurfaceContainer">@color/ed_surface</item>
+        <item name="colorSurfaceContainerHigh">@color/ed_surface2</item>
+        <item name="colorSurfaceContainerHighest">@color/ed_surface2</item>
+        <item name="colorOnSurface">@color/ed_text</item>
+        <item name="colorOnSurfaceVariant">@color/ed_text2</item>
+        <item name="colorOutline">@color/ed_line</item>
+        <item name="colorOutlineVariant">@color/ed_line</item>
+        <item name="android:colorBackground">@color/ed_bg</item>
+        <item name="android:windowBackground">@color/ed_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/ed_bg</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

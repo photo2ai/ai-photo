@@ -29,6 +29,28 @@ object CloudProtocol {
         "Remove the object(s) in the masked area and fill it realistically so it blends with the surrounding background. " +
             "Keep everything else unchanged."
 
+    /** 换脸：图 1 是要改的照片，图 2 是提供脸的参考照 */
+    const val FACE_SWAP_PROMPT =
+        "You are given two images. Image 1 is the photo to edit. Image 2 is a reference photo of a person's face. " +
+            "Replace the face of the main person in image 1 with the face of the person in image 2, so that the result clearly " +
+            "looks like the person in image 2 (same facial features and face shape). Keep image 1's hairstyle, head angle, " +
+            "facial expression, body, clothing, lighting, background and framing unchanged, and match skin tone, lighting and " +
+            "grain so the new face blends in seamlessly. Return only the edited image."
+
+    /**
+     * 换装。[hasRef] 时图 2 是衣服参考照，[desc] 是补充说明（可空）；没有参考照时 [desc] 就是要换成的衣服。
+     */
+    fun outfitPrompt(desc: String, hasRef: Boolean): String {
+        val keep = "Keep the person's face, hair, pose, body shape, background, lighting and framing unchanged, and make the " +
+            "clothes fit the body naturally with realistic folds and shadows. Return only the edited image."
+        return if (hasRef) {
+            "You are given two images. Image 1 is the photo to edit. Image 2 shows an outfit. Dress the main person in image 1 " +
+                "in the outfit from image 2" + (if (desc.isNotBlank()) " (${desc.trim()})" else "") + ". " + keep
+        } else {
+            "Change the clothing of the main person in this photo to: ${desc.trim()}. " + keep
+        }
+    }
+
     /** 地址已经带了版本（…/v1beta、…/v1）就不再加 */
     fun geminiUrl(base: String, model: String): String {
         val b = base.trim().trimEnd('/')
@@ -36,10 +58,15 @@ object CloudProtocol {
         return b + (if (versioned) "" else "/v1beta") + "/models/" + model.trim() + ":generateContent"
     }
 
-    fun geminiBody(prompt: String, image: ByteArray, mime: String): String {
+    fun geminiBody(prompt: String, image: ByteArray, mime: String): String = geminiBody(prompt, listOf(image to mime))
+
+    /** 多张图按顺序放在前面（提示词里的 image 1、image 2 就是这个顺序），文字放最后 */
+    fun geminiBody(prompt: String, images: List<Pair<ByteArray, String>>): String {
         val parts = JSONArray()
-            .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.getEncoder().encodeToString(image))))
-            .put(JSONObject().put("text", prompt))
+        for ((bytes, mime) in images) {
+            parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.getEncoder().encodeToString(bytes))))
+        }
+        parts.put(JSONObject().put("text", prompt))
         return JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
             .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("TEXT").put("IMAGE")))

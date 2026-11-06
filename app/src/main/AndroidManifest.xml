@@ -31,6 +31,7 @@
         <!-- 编辑页状态很重（整图 + 撤销栈），旋转屏幕不重建 -->
         <activity
             android:name=".ui.EditorActivity"
+            android:theme="@style/Theme.AiPhoto.Editor"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="true"
             android:label="用 AI 修图编辑"

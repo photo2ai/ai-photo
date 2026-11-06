@@ -52,6 +52,11 @@ object Store {
         get() = p.getLong("last_update_check", 0)
         set(v) = p.edit().putLong("last_update_check", v).apply()
 
+    /** 用户确认过「换脸只用于本人或已获同意的照片」 */
+    var faceConsent: Boolean
+        get() = p.getBoolean("face_consent", false)
+        set(v) = p.edit().putBoolean("face_consent", v).apply()
+
     /** 修图描述的最近几条，最新的在前 */
     fun recentPrompts(): List<String> = p.getString("recent_prompts", "").orEmpty().split('\n').filter { it.isNotBlank() }
 

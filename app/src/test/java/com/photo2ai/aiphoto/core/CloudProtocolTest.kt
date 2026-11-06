@@ -42,6 +42,27 @@ class CloudProtocolTest {
     }
 
     @Test
+    fun geminiBodyKeepsImageOrderForTwoImages() {
+        val second = byteArrayOf(9, 8, 7)
+        val parts = JSONObject(CloudProtocol.geminiBody("p", listOf(png to "image/jpeg", second to "image/png")))
+            .getJSONArray("contents").getJSONObject(0).getJSONArray("parts")
+        assertEquals(3, parts.length())
+        assertEquals(b64, parts.getJSONObject(0).getJSONObject("inline_data").getString("data"))
+        assertEquals("image/png", parts.getJSONObject(1).getJSONObject("inline_data").getString("mime_type"))
+        assertEquals("p", parts.getJSONObject(2).getString("text"))
+    }
+
+    @Test
+    fun outfitPromptWithAndWithoutReference() {
+        val ref = CloudProtocol.outfitPrompt("", hasRef = true)
+        assertTrue(ref.contains("Image 2") && !ref.contains("()"))
+        assertTrue(CloudProtocol.outfitPrompt("红色毛衣", hasRef = true).contains("(红色毛衣)"))
+        val text = CloudProtocol.outfitPrompt(" 白色婚纱 ", hasRef = false)
+        assertTrue(text.contains("to: 白色婚纱.") && !text.contains("Image 2"))
+        assertTrue(CloudProtocol.FACE_SWAP_PROMPT.contains("Image 2"))
+    }
+
+    @Test
     fun parseGeminiTakesLastNonThoughtImage() {
         val json = """{"candidates":[{"content":{"parts":[
             {"text":"here you go"},

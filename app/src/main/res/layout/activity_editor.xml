@@ -59,8 +59,11 @@
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"
-            android:paddingHorizontal="18dp"
-            android:text="保存" />
+            android:paddingHorizontal="20dp"
+            android:background="@drawable/bg_accent_gradient"
+            android:text="保存"
+            android:textColor="@color/on_accent"
+            app:backgroundTint="@null" />
     </LinearLayout>
 
     <FrameLayout
@@ -82,7 +85,7 @@
             android:background="@drawable/bg_pill"
             android:paddingHorizontal="12dp"
             android:paddingVertical="5dp"
-            android:textColor="@color/text"
+            android:textColor="@color/ed_text"
             android:textSize="12sp"
             android:visibility="gone" />
 
@@ -102,7 +105,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:background="@drawable/bg_card"
+            android:background="@drawable/bg_card_dark"
             android:clickable="true"
             android:gravity="center"
             android:minWidth="180dp"
@@ -123,7 +126,7 @@
                 android:layout_marginTop="14dp"
                 android:gravity="center"
                 android:maxWidth="240dp"
-                android:textColor="@color/text"
+                android:textColor="@color/ed_text"
                 android:textSize="14sp" />
 
             <com.google.android.material.button.MaterialButton
@@ -141,7 +144,7 @@
         android:id="@+id/toolPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/surface"
+        android:background="@color/ed_surface"
         android:orientation="vertical"
         android:visibility="gone">
 
@@ -169,7 +172,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:gravity="center"
-                android:textColor="@color/text"
+                android:textColor="@color/ed_text"
                 android:textSize="15sp"
                 android:textStyle="bold" />
 
@@ -188,7 +191,7 @@
         android:id="@+id/tools"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/surface"
+        android:background="@color/ed_surface"
         android:scrollbars="none">
 
         <LinearLayout

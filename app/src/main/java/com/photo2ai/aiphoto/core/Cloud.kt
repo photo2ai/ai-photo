@@ -34,11 +34,24 @@ object Cloud {
     }
 
     /** 按描述修图。返回的图尺寸由模型决定（通常长边 1024 左右） */
-    suspend fun edit(cfg: Store.Cloud, src: Bitmap, prompt: String): Bitmap = withContext(Dispatchers.Default) {
+    suspend fun edit(cfg: Store.Cloud, src: Bitmap, prompt: String, wrap: Boolean = true): Bitmap = withContext(Dispatchers.Default) {
         val img = ImageIO.fit(src, UPLOAD_SIDE)
         val bytes = when (cfg.provider) {
-            CloudProtocol.OPENAI -> openAi(cfg, img, prompt, null)
-            else -> gemini(cfg, img, CloudProtocol.editPrompt(prompt))
+            CloudProtocol.OPENAI -> openAi(cfg, listOf(img), prompt, null)
+            else -> gemini(cfg, listOf(img), if (wrap) CloudProtocol.editPrompt(prompt) else prompt)
+        }
+        decode(bytes)
+    }
+
+    /**
+     * 两张图一起交给模型（换脸、照参考图换装）：[src] 是要改的照片（图 1），[ref] 是参考照（图 2）。参考照缩到长边 1024。
+     */
+    suspend fun compose(cfg: Store.Cloud, src: Bitmap, ref: Bitmap, prompt: String): Bitmap = withContext(Dispatchers.Default) {
+        val img = ImageIO.fit(src, UPLOAD_SIDE)
+        val r = ImageIO.fit(ref, 1024)
+        val bytes = when (cfg.provider) {
+            CloudProtocol.OPENAI -> openAi(cfg, listOf(img, r), prompt, null)
+            else -> gemini(cfg, listOf(img, r), prompt)
         }
         decode(bytes)
     }
@@ -51,8 +64,8 @@ object Cloud {
         val img = ImageIO.fit(src, UPLOAD_SIDE)
         val m = ImageIO.scaled(mask, img.width, img.height)
         val bytes = when (cfg.provider) {
-            CloudProtocol.OPENAI -> openAi(cfg, img, CloudProtocol.ERASE_PROMPT_MASK, openAiMask(m))
-            else -> gemini(cfg, marked(img, m), CloudProtocol.ERASE_PROMPT_MARKED)
+            CloudProtocol.OPENAI -> openAi(cfg, listOf(img), CloudProtocol.ERASE_PROMPT_MASK, openAiMask(m))
+            else -> gemini(cfg, listOf(marked(img, m)), CloudProtocol.ERASE_PROMPT_MARKED)
         }
         val result = ImageIO.scaled(decode(bytes), src.width, src.height)
         val full = alphaOf(ImageIO.scaled(mask, src.width, src.height))
@@ -62,8 +75,8 @@ object Cloud {
         ImageIO.toBitmap(Pixels.composite(ImageIO.pixels(result), ImageIO.pixels(src), grown), src.width, src.height)
     }
 
-    private suspend fun gemini(cfg: Store.Cloud, img: Bitmap, prompt: String): ByteArray {
-        val body = CloudProtocol.geminiBody(prompt, ImageIO.encode(img, png = false, quality = 92), "image/jpeg")
+    private suspend fun gemini(cfg: Store.Cloud, imgs: List<Bitmap>, prompt: String): ByteArray {
+        val body = CloudProtocol.geminiBody(prompt, imgs.map { ImageIO.encode(it, png = false, quality = 92) to "image/jpeg" })
         val req = Request.Builder()
             .url(CloudProtocol.geminiUrl(cfg.base, cfg.model))
             .header("x-goog-api-key", cfg.key)
@@ -73,12 +86,14 @@ object Cloud {
         return CloudProtocol.parseGemini(send(req))
     }
 
-    private suspend fun openAi(cfg: Store.Cloud, img: Bitmap, prompt: String, mask: ByteArray?): ByteArray {
+    /** 一张图用 image 字段；多张图用重复的 image[] 字段（gpt-image-1 支持多图参考） */
+    private suspend fun openAi(cfg: Store.Cloud, imgs: List<Bitmap>, prompt: String, mask: ByteArray?): ByteArray {
         val png = "image/png".toMediaType()
         val form = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("model", cfg.model)
             .addFormDataPart("prompt", prompt)
-            .addFormDataPart("image", "image.png", ImageIO.encode(img, png = true).toRequestBody(png))
+        val field = if (imgs.size > 1) "image[]" else "image"
+        imgs.forEachIndexed { i, b -> form.addFormDataPart(field, "image$i.png", ImageIO.encode(b, png = true).toRequestBody(png)) }
         if (mask != null) form.addFormDataPart("mask", "mask.png", mask.toRequestBody(png))
         val req = Request.Builder()
             .url(CloudProtocol.openAiUrl(cfg.base))

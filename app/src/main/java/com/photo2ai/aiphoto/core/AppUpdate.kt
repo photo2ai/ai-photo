@@ -3,7 +3,10 @@ package com.photo2ai.aiphoto.core
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.photo2ai.aiphoto.BuildConfig
@@ -73,6 +76,7 @@ object AppUpdate {
         if (code <= BuildConfig.VERSION_CODE) return Check(null, null)
         val url = o.optString("url")
         if (!url.startsWith("http://") && !url.startsWith("https://")) return Check(null, "更新信息里没有下载地址")
+        if (!o.optString("sha256").matches(Regex("[0-9a-fA-F]{64}"))) return Check(null, "更新信息缺少校验值")
         val info = Info(
             code, o.optString("versionName").ifEmpty { code.toString() }, url, o.optString("sha256").lowercase(),
             o.optString("notes"), o.optLong("size"), o.optBoolean("force"),
@@ -265,6 +269,33 @@ object AppUpdate {
                 .setDataAndType(uri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
         )
+    }
+
+    /**
+     * 安装前再核对一次：必须是本应用的包、签名证书和已安装的一致。更新信息来自第三方镜像，被篡改时可能换成别的应用的包
+     * 诱导用户安装（换不了本应用：系统会拒绝签名不同的覆盖安装，但「装一个新应用」系统不拦）。返回 null 表示通过。
+     */
+    fun verifyPackage(context: Context, file: File): String? {
+        val pm = context.packageManager
+        @Suppress("DEPRECATION")
+        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val archive = pm.getPackageArchiveInfo(file.path, flags) ?: return "安装包无法解析"
+        if (archive.packageName != context.packageName) return "安装包不是本应用，已丢弃"
+        val mine = certs(pm.getPackageInfo(context.packageName, flags))
+        val theirs = certs(archive)
+        if (mine.isEmpty() || !theirs.containsAll(mine)) return "安装包签名和当前应用不一致，已丢弃"
+        return null
+    }
+
+    private fun certs(info: PackageInfo): Set<String> {
+        @Suppress("DEPRECATION")
+        val sigs = if (Build.VERSION.SDK_INT >= 28) {
+            val si = info.signingInfo ?: return emptySet()
+            if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+        } else {
+            info.signatures
+        } ?: return emptySet()
+        return sigs.map { sig -> MessageDigest.getInstance("SHA-256").digest(sig.toByteArray()).joinToString("") { "%02x".format(it) } }.toSet()
     }
 
     /** 有的系统没有这个设置页，返回 false 时由调用方告诉用户去哪里开 */
