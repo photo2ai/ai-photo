@@ -1,0 +1,75 @@
+# AI 修图
+
+原生 Kotlin 写的安卓修图 App（Android 8.0+）。常用修图在手机上完成，不依赖自建服务端；「一句话修图」和「AI 消除」用用户自己的 Gemini 或 OpenAI（及兼容接口）API Key。
+
+## 功能
+
+- **智能增强**（本机）：自动色阶和白平衡（三个通道的黑白点往平均靠 60%，去偏色又不洗掉夕阳的暖色）、偏暗时提亮（正常和偏亮的照片不压暗）、细节清晰度、自然饱和度（肤色不加）、轻微锐化；强度可调，默认 70%
+- **人像抠图**（本机）：ML Kit 自拍分割（模型打在包里，不需要 Google Play 服务），再用导向滤波把蒙版边缘贴到真实轮廓上。效果：背景虚化（先把人从背景里填掉再模糊，没有光晕）、背景黑白、透明背景（存 PNG）、白底 / 证件蓝 / 证件红 / 浅灰 / 黑底
+- **消除**：手指涂抹要去掉的东西（双指缩放移动，可撤销一笔、调笔刷大小）
+  - 快速消除（本机）：push-pull 金字塔填充，适合小瑕疵、光斑、电线
+  - AI 消除（云端）：Gemini 收到的是盖了半透明红色标记的图，OpenAI 收到原图 + 蒙版；返回结果只取涂抹区域（略外扩、羽化）贴回原图，其余像素保持原分辨率
+- **AI 修图**（云端）：一句话描述想怎么改，预设有画质增强、老照片修复、去掉路人、换成蓝天、晚霞天空、证件照白底、动漫风格、去除反光，最近用过的描述也在里面。结果尺寸由模型决定（通常长边 1024 左右）
+- **调整**：亮度、对比度、高光、阴影、饱和度、色温、色调、褪色、锐化、暗角，实时预览
+- **滤镜**：鲜明、暖阳、清冷、胶片、日系、复古、浓郁、黑白、褪色黑白，带缩略图和强度
+- **裁剪旋转**：自由 / 原比例 / 1:1 / 4:3 / 3:4 / 16:9 / 9:16，旋转 90°、水平翻转；锁定比例时拖四个角
+- **撤销 / 重做**（最多 20 步，整图原始像素存在缓存目录）、**按住对比**原图、双指缩放、双击放大
+- **保存**到相册「AI修图」文件夹（有透明像素存 PNG，否则 JPEG 95），**分享**给其它 App；也能从别的 App「分享 / 编辑」直接打开
+- **应用内更新**：启动时每 12 小时读一次 `releases/app-version.json`（gh-proxy、ghfast、jsDelivr、GitHub 原地址同时请求），下载校验 SHA-256、断点续传，再调系统安装器（代码移植自 TV Player）
+
+编辑时图片最大约 1600 万像素（按可用内存再降），超过的按比例缩小；实时预览在长边 2048 的预览图上算，点 ✓ 时按原图尺寸再算一遍。
+
+## AI 服务设置
+
+设置 → AI 服务，选 Google Gemini 或 OpenAI 兼容，填 API Key；接口地址、模型可留空用默认：
+
+| | 默认地址 | 默认模型 | 接口 |
+|---|---|---|---|
+| Gemini | `https://generativelanguage.googleapis.com` | `gemini-2.5-flash-image` | `/v1beta/models/{模型}:generateContent` |
+| OpenAI 兼容 | `https://api.openai.com/v1` | `gpt-image-1` | `/images/edits`（multipart） |
+
+中转 / 代理填它的地址即可（Gemini 地址已带 `/v1beta` 之类版本号时不再追加）。照片缩到长边 1536 再上传。Key 只存本机，应用关闭了系统备份。
+
+## 构建与测试
+
+需要 JDK 17+、Gradle 9.x、Android SDK 35（`local.properties` 的 `sdk.dir` 指向 SDK，不提交）。`gradle.properties` 里写了本机代理 `127.0.0.1:7890`，没有代理的环境删掉 `systemProp.*` 几行。
+
+```bash
+gradle assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
+gradle testDebugUnitTest    # JVM 单测：调整、增强、消除填充、导向滤波、云端接口请求与解析、更新镜像
+```
+
+单测只覆盖纯计算和接口协议（`core/` 里不依赖 android.graphics 的部分）；界面、人像分割、相册读写要在真机或模拟器上验证。
+
+## 发版
+
+和 TV Player 相同：APK 提交在仓库的 `releases/` 里，`releases/app-version.json` 是应用内更新读的版本说明。
+
+```bash
+scripts/release.sh 2 1.0.1 "这一版的更新说明"
+```
+
+脚本依次：用 `-PappVersionCode / -PappVersionName` 打 release 包（R8 混淆 + 资源压缩）→ zipalign → 用本机 `~/.android/debug.keystore` 签名（关掉 v1 和 v4）→ 打印证书 SHA-256（和上一版核对）→ 生成 `releases/app-version.json` → `releases/` 只留最近 5 个 APK。然后提交（信息格式 `AI Photo 1.0.1: 改了什么`）并推送到 `main`，手机上「检查更新」就能收到。
+
+签名证书就是本机的 debug.keystore：换电脑发版要带上这个文件，否则新包签名不同、覆盖安装会失败。
+
+## 代码结构
+
+```
+app/src/main/java/com/photo2ai/aiphoto/
+├── core/  Pixels / Adjust / Enhance / Inpaint / Cutout / CloudProtocol（纯计算，可单测）
+│          ImageIO（读图、存相册、分享）、History（撤销栈）、Segment（ML Kit 人像分割和背景效果）、
+│          Cloud（Gemini / OpenAI 请求）、Store（设置）、Http、AppUpdate（应用内更新）
+└── ui/    MainActivity（首页）、EditorActivity（编辑页和各个工具）、PhotoView（看图 / 涂抹 / 裁剪框）、
+           SettingsActivity、UpdateUi
+```
+
+## 验证情况
+
+在 Android 15 模拟器（Pixel 6 尺寸）上实际操作过：首页 → 系统照片选择器 → 编辑页；智能增强；人像抠图的虚化、白底并保存（相册里 1600×2400 的 JPEG）；快速消除；裁剪 1:1 + 旋转 + 拖角后保存（1301×1301）；滤镜；调整；撤销；设置页填写。AI 修图和 AI 消除对着本机模拟的 Gemini / OpenAI 接口验证了请求格式（地址、Key 请求头、图片、提示词、multipart 蒙版）、结果贴回和出错提示。
+
+Release 包（R8 混淆）上复测过人像抠图、保存和云端请求：R8 会把 ML Kit 按类名反射创建的组件优化掉，`proguard-rules.pro` 里的保留规则不能删。
+
+没有验证的：真实的 Gemini / OpenAI 服务（没有 Key）及其实际修图效果；真机；Android 8～9 的存相册（走旧的存储权限路径）；应用内更新的下载安装（要等第一版推送后才有 `app-version.json`）。
+
+已知局限：人像分割是 ML Kit 的自拍模型（输入 256×256），人贴着墙、有影子时，影子可能被当成人的一部分（换纯色底时看得出来）；需要更精细的换底可以用「AI 修图」描述。

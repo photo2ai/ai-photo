@@ -1,0 +1,9 @@
+{
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.0.apk",
+  "sha256": "98856ceb84117c7e86ccad25864fcf5716338f3461795666870d53002837e597",
+  "size": 12623781,
+  "notes": "第一版：智能增强、人像抠图（背景虚化 / 换底色 / 透明背景）、涂抹消除（本机快速消除和 AI 消除）、一句话 AI 修图、调整、滤镜、裁剪旋转。AI 功能需要在设置里填写自己的 Gemini 或 OpenAI API Key。",
+  "force": false
+}

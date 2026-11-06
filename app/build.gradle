@@ -1,0 +1,68 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace = 'com.photo2ai.aiphoto'
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = 'com.photo2ai.aiphoto'
+        minSdk = 26
+        targetSdk = 35
+        // 发版时用 -PappVersionCode / -PappVersionName 指定，见 README「发版」
+        versionCode = (project.findProperty('appVersionCode') ?: '1').toString().toInteger()
+        versionName = (project.findProperty('appVersionName') ?: '1.0.0').toString()
+        // 原生库只有 ML Kit 人像分割（TFLite）：手机基本都是 ARM，只打这两种
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a'
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 界面只有中文：依赖库带的其它语言翻译不打进包里
+    androidResources {
+        localeFilters += ['zh-rCN', 'zh-rHK', 'zh-rTW']
+    }
+
+    // ML Kit 人像分割的运行库 libxeno_native.so 很大（arm64 21.6MB、armv7 16MB），默认不压缩直接从包里加载。
+    // 压缩后放进包里：安装包从 39.5MB 降到约 12MB，代价是安装时系统要解压一份到存储里
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.activity:activity-ktx:1.10.1'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
+    implementation 'androidx.exifinterface:exifinterface:1.3.7'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+    // 人像分割：模型随包打入，不依赖 Google Play 服务
+    implementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
+
+    testImplementation 'junit:junit:4.13.2'
+    // Android 自带的 org.json 在单测里是空壳，用真的实现跑 JSON 解析
+    testImplementation 'org.json:json:20240303'
+}
