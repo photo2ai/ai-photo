@@ -18,10 +18,12 @@ import kotlin.math.roundToInt
 /** ML Kit 人脸网格（本机运行，模型随 ML Kit 打在包里）和本地换脸的安卓部分 */
 object FaceMesh {
     /** 一张脸：468 个点（x,y 按编号排列，原图坐标）、三角形编号、外轮廓编号、外接框 */
-    /** [holes] 依次是两只眼睛和嘴的开口轮廓 */
-    class Face(val pts: FloatArray, val tris: IntArray, val oval: IntArray, val holes: List<IntArray>, val box: Rect) {
+    /** [holes] 依次是两只眼睛和嘴的开口轮廓；[parts] 是两条眉毛和嘴唇外沿（美颜时不磨皮、不美白） */
+    class Face(val pts: FloatArray, val tris: IntArray, val oval: IntArray, val holes: List<IntArray>, val box: Rect, val parts: List<IntArray>) {
         /** 神经网络换脸用的 5 个关键点。鼻尖是网格的 1 号点，嘴角是 61、291 号（MediaPipe 的人脸网格编号） */
         fun five() = FaceSwap.fivePoints(pts, holes[0], holes[1], 1, 61, 291)
+
+        fun beautyGeom() = Beauty.Geom(pts, oval, holes.take(2), holes.take(2) + parts)
     }
 
     class NoFace(message: String) : Exception(message)
@@ -30,7 +32,12 @@ object FaceMesh {
      * 有多张脸取最大的，坐标换算回原图。ML Kit 的人脸网格用近距离模型，会把整张图补成正方形再找脸：竖拍、横拍的照片里
      * 脸会被缩得很小而找不到，所以整张找不到时，再沿长边取上中下（左中右）三个正方形各找一次。
      */
-    suspend fun detect(src: Bitmap): Face? {
+    suspend fun detect(src: Bitmap): Face? = detectIn(src, all = false).firstOrNull()
+
+    /** 照片里所有的脸（美颜用）：整张图里能找到的都要；整张找不到时和 [detect] 一样分块找，只取最大的一张 */
+    suspend fun detectAll(src: Bitmap): List<Face> = detectIn(src, all = true)
+
+    private suspend fun detectIn(src: Bitmap, all: Boolean): List<Face> {
         val side = minOf(src.width, src.height)
         val crops = ArrayList<Rect>()
         crops += Rect(0, 0, src.width, src.height)
@@ -52,33 +59,47 @@ object FaceMesh {
                 val small = ImageIO.fit(part, 1280)
                 val k = part.width.toFloat() / small.width
                 val meshes = detector.process(InputImage.fromBitmap(small, 0)).await()
-                val m = meshes.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() } ?: continue
-                val all = m.allPoints
-                val pts = FloatArray(all.size * 2)
-                for (p in all) {
-                    pts[p.index * 2] = p.position.x * k + c.left
-                    pts[p.index * 2 + 1] = p.position.y * k + c.top
-                }
-                val tris = ArrayList<Int>()
-                for (t in m.allTriangles) for (p in t.allPoints) tris += p.index
-                fun contour(type: Int) = m.getPoints(type).map { it.index }.toIntArray()
-                val oval = contour(com.google.mlkit.vision.facemesh.FaceMesh.FACE_OVAL)
-                // 嘴的开口：上唇下沿 + 倒过来的下唇上沿
-                val mouth = contour(com.google.mlkit.vision.facemesh.FaceMesh.UPPER_LIP_BOTTOM) +
-                    contour(com.google.mlkit.vision.facemesh.FaceMesh.LOWER_LIP_TOP).reversedArray()
-                val holes = listOf(
-                    contour(com.google.mlkit.vision.facemesh.FaceMesh.LEFT_EYE),
-                    contour(com.google.mlkit.vision.facemesh.FaceMesh.RIGHT_EYE),
-                    mouth,
-                )
-                val b = m.boundingBox
-                val box = Rect((b.left * k).toInt() + c.left, (b.top * k).toInt() + c.top, (b.right * k).toInt() + c.left, (b.bottom * k).toInt() + c.top)
-                return Face(pts, tris.toIntArray(), oval, holes, box)
+                val sorted = meshes.sortedByDescending { it.boundingBox.width() * it.boundingBox.height() }
+                if (sorted.isEmpty()) continue
+                return (if (all && c === crops[0]) sorted else sorted.take(1)).map { toFace(it, k, c) }
             }
-            return null
+            return emptyList()
         } finally {
             detector.close()
         }
+    }
+
+    private fun toFace(m: com.google.mlkit.vision.facemesh.FaceMesh, k: Float, c: Rect): Face {
+        val mp = m.allPoints
+        val pts = FloatArray(mp.size * 2)
+        for (p in mp) {
+            pts[p.index * 2] = p.position.x * k + c.left
+            pts[p.index * 2 + 1] = p.position.y * k + c.top
+        }
+        val tris = ArrayList<Int>()
+        for (t in m.allTriangles) for (p in t.allPoints) tris += p.index
+        fun contour(type: Int) = m.getPoints(type).map { it.index }.toIntArray()
+        val oval = contour(com.google.mlkit.vision.facemesh.FaceMesh.FACE_OVAL)
+        // 嘴的开口：上唇下沿 + 倒过来的下唇上沿
+        val mouth = contour(com.google.mlkit.vision.facemesh.FaceMesh.UPPER_LIP_BOTTOM) +
+            contour(com.google.mlkit.vision.facemesh.FaceMesh.LOWER_LIP_TOP).reversedArray()
+        val holes = listOf(
+            contour(com.google.mlkit.vision.facemesh.FaceMesh.LEFT_EYE),
+            contour(com.google.mlkit.vision.facemesh.FaceMesh.RIGHT_EYE),
+            mouth,
+        )
+        // 眉毛：上沿 + 倒过来的下沿；嘴唇外沿：上唇上沿 + 倒过来的下唇下沿
+        val parts = listOf(
+            contour(com.google.mlkit.vision.facemesh.FaceMesh.LEFT_EYEBROW_TOP) +
+                contour(com.google.mlkit.vision.facemesh.FaceMesh.LEFT_EYEBROW_BOTTOM).reversedArray(),
+            contour(com.google.mlkit.vision.facemesh.FaceMesh.RIGHT_EYEBROW_TOP) +
+                contour(com.google.mlkit.vision.facemesh.FaceMesh.RIGHT_EYEBROW_BOTTOM).reversedArray(),
+            contour(com.google.mlkit.vision.facemesh.FaceMesh.UPPER_LIP_TOP) +
+                contour(com.google.mlkit.vision.facemesh.FaceMesh.LOWER_LIP_BOTTOM).reversedArray(),
+        )
+        val b = m.boundingBox
+        val box = Rect((b.left * k).toInt() + c.left, (b.top * k).toInt() + c.top, (b.right * k).toInt() + c.left, (b.bottom * k).toInt() + c.top)
+        return Face(pts, tris.toIntArray(), oval, holes, box, parts)
     }
 
     /** 目标脸周围（外扩 [k] 倍脸框）的一块，坐标都换算到这块里 */

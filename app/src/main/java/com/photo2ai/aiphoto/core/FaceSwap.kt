@@ -213,7 +213,8 @@ object FaceSwap {
         return out to cover
     }
 
-    private fun sample(px: IntArray, w: Int, h: Int, fx: Float, fy: Float): Int {
+    /** 双线性取色（坐标是像素左上角为原点，超出边界按边缘取），结果不透明 */
+    internal fun sample(px: IntArray, w: Int, h: Int, fx: Float, fy: Float): Int {
         val x = fx.coerceIn(0f, (w - 1).toFloat())
         val y = fy.coerceIn(0f, (h - 1).toFloat())
         val x0 = x.toInt()

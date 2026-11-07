@@ -45,6 +45,7 @@ import com.google.android.material.textfield.TextInputLayout
 import com.photo2ai.aiphoto.R
 import com.photo2ai.aiphoto.core.Accel
 import com.photo2ai.aiphoto.core.Adjust
+import com.photo2ai.aiphoto.core.Beauty
 import com.photo2ai.aiphoto.core.Cloud
 import com.photo2ai.aiphoto.core.CloudProtocol
 import com.photo2ai.aiphoto.core.Cutout
@@ -75,6 +76,7 @@ class EditorActivity : AppCompatActivity() {
         /** 抠图工具一打开就选中的效果（Segment.Effect 的名字），首页「证件照」用 */
         const val EXTRA_EFFECT = "effect"
         const val TOOL_ENHANCE = "enhance"
+        const val TOOL_BEAUTY = "beauty"
         const val TOOL_AI = "ai"
         const val TOOL_ERASE = "erase"
         const val TOOL_CUTOUT = "cutout"
@@ -375,6 +377,7 @@ class EditorActivity : AppCompatActivity() {
 
     private val toolDefs = listOf(
         ToolDef(TOOL_ENHANCE, R.drawable.ic_magic, "智能增强"),
+        ToolDef(TOOL_BEAUTY, R.drawable.ic_beauty, "美颜"),
         ToolDef(TOOL_UPSCALE, R.drawable.ic_hd, "变清晰"),
         ToolDef(TOOL_AI, R.drawable.ic_sparkle, "AI 修图"),
         ToolDef(TOOL_FACE, R.drawable.ic_face, "换脸"),
@@ -417,6 +420,7 @@ class EditorActivity : AppCompatActivity() {
         if (id == TOOL_SYSTEM) return systemEdit()
         val t = when (id) {
             TOOL_ENHANCE -> EnhanceTool()
+            TOOL_BEAUTY -> BeautyTool()
             TOOL_AI -> AiTool()
             TOOL_ERASE -> EraseTool()
             TOOL_CUTOUT -> CutoutTool()
@@ -648,6 +652,86 @@ class EditorActivity : AppCompatActivity() {
             val b = current!!
             val px = ImageIO.pixels(b)
             ImageIO.toBitmap(Pixels.mix(px, Enhance.auto(px, b.width, b.height), strength), b.width, b.height)
+        }
+    }
+
+    private inner class BeautyTool : Tool("美颜") {
+        private inner class Param(val name: String, val get: (Beauty.Params) -> Float, val set: (Beauty.Params, Float) -> Beauty.Params)
+
+        private val params = listOf(
+            Param("磨皮", { it.smooth }) { a, v -> a.copy(smooth = v) },
+            Param("美白", { it.whiten }) { a, v -> a.copy(whiten = v) },
+            Param("瘦脸", { it.slim }) { a, v -> a.copy(slim = v) },
+            Param("大眼", { it.eyes }) { a, v -> a.copy(eyes = v) },
+        )
+
+        /** 一打开就有磨皮、美白，瘦脸、大眼让用户自己加 */
+        private var values = Beauty.Params(smooth = 0.5f, whiten = 0.3f)
+        private var selected = 0
+        private var faces: List<FaceMesh.Face> = emptyList()
+        private var prepared: List<Beauty.Prepared> = emptyList()
+        private lateinit var slider: Slider
+        private lateinit var chips: LinearLayout
+        override val applyText = "正在美颜…"
+
+        private fun chipText(p: Param): String {
+            val v = (p.get(values) * 100).roundToInt()
+            return if (v == 0) p.name else "${p.name} $v"
+        }
+
+        override fun panel(): View {
+            val (row, group) = chipRow(params.map { chipText(it) }, 0) { select(it) }
+            chips = group
+            val (sRow, s) = sliderRow("", 0f, 100f, params[0].get(values) * 100) { v ->
+                val p = params[selected]
+                values = p.set(values, v / 100f)
+                (chips.getChildAt(selected) as Chip).text = chipText(p)
+                refresh()
+            }
+            slider = s
+            return column(hint("磨皮（也会淡化斑点、痘印）和美白只作用在脸部皮肤上，在手机上完成"), row, sRow)
+        }
+
+        private fun select(i: Int) {
+            selected = i
+            slider.value = params[i].get(values) * 100
+        }
+
+        override fun enter() {
+            busy("正在识别人脸…") {
+                val found = FaceMesh.detectAll(basePreview)
+                val base = basePx
+                val ok = withContext(Dispatchers.Default) {
+                    found.mapNotNull { f -> Beauty.prepare(base, pw, ph, f.beautyGeom())?.let { f to it } }
+                }
+                if (ok.isEmpty()) {
+                    closeTool()
+                    alert("没有找到人脸", "美颜需要照片里有清楚的人脸，脸太小也找不到。")
+                    return@busy
+                }
+                faces = ok.map { it.first }
+                prepared = ok.map { it.second }
+                if (ok.size > 1) flashInfo("找到 ${ok.size} 张脸，一起美颜")
+                refresh()
+            }
+        }
+
+        private fun refresh() {
+            val list = prepared
+            if (list.isEmpty()) return
+            val v = values
+            val base = basePx
+            render { Beauty.apply(base, pw, list, v) }
+        }
+
+        /** 原图上重新准备一遍：人脸网格按预览图到原图的比例放大，半径、力度都跟着脸宽走，效果和预览一致 */
+        override suspend fun result(): Bitmap? = withContext(Dispatchers.Default) {
+            if (values.isIdentity || faces.isEmpty()) return@withContext null
+            val b = current!!
+            val k = b.width.toFloat() / pw
+            val px = ImageIO.pixels(b)
+            val prep = faces.mapNotNull { Beauty.prepare(px, b.width, b.height, it.beautyGeom().scaled(k)) }
+            ImageIO.toBitmap(Beauty.apply(px, b.width, prep, values), b.width, b.height)
         }
     }
 

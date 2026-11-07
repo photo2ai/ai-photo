@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
 
     private val tiles = listOf(
         Tile(EditorActivity.TOOL_ENHANCE, R.drawable.ic_magic, "智能增强", 0xFFFF8A3D.toInt()),
+        Tile(EditorActivity.TOOL_BEAUTY, R.drawable.ic_beauty, "人像美颜", 0xFFE86AD8.toInt()),
         Tile(EditorActivity.TOOL_UPSCALE, R.drawable.ic_hd, "变清晰", 0xFF3D8BFF.toInt()),
         Tile(EditorActivity.TOOL_ERASE, R.drawable.ic_eraser, "消除笔", 0xFF2FB862.toInt()),
         Tile(EditorActivity.TOOL_CUTOUT, R.drawable.ic_person, "人像抠图", 0xFF7B61FF.toInt()),
