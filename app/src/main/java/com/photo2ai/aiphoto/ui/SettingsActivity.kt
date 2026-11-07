@@ -8,7 +8,17 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.photo2ai.aiphoto.BuildConfig
 import com.photo2ai.aiphoto.R
+import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.materialswitch.MaterialSwitch
+import com.photo2ai.aiphoto.core.Accel
 import com.photo2ai.aiphoto.core.CloudProtocol
+import com.photo2ai.aiphoto.core.LocalAi
+import com.photo2ai.aiphoto.core.LocalModels
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.photo2ai.aiphoto.core.Store
 
 class SettingsActivity : AppCompatActivity() {
@@ -42,8 +52,65 @@ class SettingsActivity : AppCompatActivity() {
             load()
         }
 
+        val accel = findViewById<MaterialSwitch>(R.id.accel)
+        accel.isChecked = Store.accelEnabled
+        accel.setOnCheckedChangeListener { _, on ->
+            Store.accelEnabled = on
+            LocalAi.releaseAll()
+            showAccel()
+        }
+        findViewById<android.view.View>(R.id.accelTest).setOnClickListener { retest() }
+        showAccel()
+
         findViewById<TextView>(R.id.version).text = "当前版本 " + BuildConfig.VERSION_NAME
         findViewById<android.view.View>(R.id.checkUpdate).setOnClickListener { UpdateUi.manualCheck(this) }
+    }
+
+    private val localModels = listOf(LocalModels.MIGAN, LocalModels.ESRGAN, LocalModels.ARCFACE, LocalModels.INSWAPPER)
+
+    private fun showAccel() {
+        val lines = localModels.filter { LocalModels.ready(this, it) != null }.map { m ->
+            Store.accelSummary(m.sha256).ifEmpty { m.title + "：还没测，第一次使用时自动测" }
+        }
+        val head = when {
+            !LocalModels.supported() -> "这台手机是 32 位系统，用不了本地模型。"
+            !Store.accelEnabled -> "已关闭，本地模型都用 CPU 计算。结果不对或者闪退时可以关掉试试。"
+            else -> "每个模型第一次使用时，在这台手机上分别测一次 CPU 和 AI 芯片，结果正确又更快的才用。"
+        }
+        findViewById<TextView>(R.id.accelInfo).text =
+            head + if (lines.isEmpty()) "\n还没有下载本地模型。" else "\n" + lines.joinToString("\n")
+        findViewById<android.view.View>(R.id.accelTest).isEnabled = Store.accelEnabled && lines.isNotEmpty() && LocalModels.supported()
+    }
+
+    /** 已下载的模型全部重新测一遍 */
+    private fun retest() {
+        val models = localModels.mapNotNull { m -> LocalModels.ready(this, m)?.let { m to it } }
+        val text = TextView(this).apply { setPadding(dp(24), dp(16), dp(24), 0) }
+        var job: Job? = null
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("正在测试")
+            .setView(text)
+            .setCancelable(false)
+            .setNegativeButton("停止") { _, _ -> job?.cancel() }
+            .show()
+        job = lifecycleScope.launch {
+            LocalAi.releaseAll()
+            Store.clearAccel()
+            for ((k, pair) in models.withIndex()) {
+                val (m, f) = pair
+                text.text = "${m.title}（${k + 1}/${models.size}）…\n大模型要几十秒"
+                withContext(Dispatchers.Default) {
+                    try {
+                        Accel.benchmark(m, f)
+                    } catch (e: Exception) {
+                        Store.setAccel(m.sha256, Accel.Backend.CPU.name, m.title + "：CPU（测速出错）")
+                    }
+                }
+            }
+            dialog.dismiss()
+            showAccel()
+        }
+        job.invokeOnCompletion { runOnUiThread { if (dialog.isShowing) dialog.dismiss(); showAccel() } }
     }
 
     /** 每个服务的 Key、地址、模型分开存，切换时各自保留 */

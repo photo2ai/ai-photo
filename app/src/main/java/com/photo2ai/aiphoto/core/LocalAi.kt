@@ -12,26 +12,43 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import kotlin.coroutines.coroutineContext
 
-/** 本地模型推理（ONNX Runtime，CPU） */
+/** 本地模型推理（ONNX Runtime）。用 CPU 还是 AI 芯片由 [backendFor] 决定（App 里接到 [Accel]，单测里是 CPU） */
 object LocalAi {
     val env: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private val sessions = HashMap<String, OrtSession>()
 
+    var backendFor: (File) -> Accel.Backend = { Accel.Backend.CPU }
+
     class BrokenModel(message: String) : Exception(message)
 
-    /** 加载失败说明模型文件坏了：删掉，提示重试（下次会重新下载） */
+    /**
+     * 按选定的方式建会话。加速方式加载失败（驱动不支持）就退回 CPU 并记下；CPU 也加载失败才说明模型文件坏了：
+     * 删掉，提示重试（下次会重新下载）。
+     */
     @Synchronized
     fun session(file: File): OrtSession = sessions.getOrPut(file.path) {
-        val opts = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(1, 4))
-            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        val backend = backendFor(file)
+        if (backend != Accel.Backend.CPU) {
+            try {
+                return@getOrPut env.createSession(file.path, Accel.options(file, backend))
+            } catch (e: OrtException) {
+                android.util.Log.w("AIPhoto", "accel $backend failed for ${file.name}: ${e.message}")
+                Accel.fallBack(file)
+            }
         }
         try {
-            env.createSession(file.path, opts)
+            env.createSession(file.path, Accel.options(file, Accel.Backend.CPU))
         } catch (e: OrtException) {
             LocalModels.discard(file)
             throw BrokenModel("模型文件损坏，已经删除，再试一次会重新下载")
         }
+    }
+
+    /** 换了加速方式后，已经建好的会话都作废 */
+    @Synchronized
+    fun releaseAll() {
+        sessions.values.forEach { it.close() }
+        sessions.clear()
     }
 
     /** 用完大模型就释放（换脸的两个模型一共 450MB，一起常驻容易被系统杀掉） */
@@ -90,20 +107,24 @@ object LocalAi {
     }
 
     /**
-     * Real-ESRGAN 放大 4 倍，分块算（默认块 192、重叠 12），每块算完报一次进度；协程取消时在块之间停下。
+     * Real-ESRGAN 放大 4 倍，分块算（块 [tile]、重叠 12），每块算完报一次进度；协程取消时在块之间停下。
+     * 每块都补齐成同样大小（块 + 两边重叠，图边上的块和比块还小的图用边缘像素补）再送进模型：
+     * NNAPI 只能编译固定尺寸的输入，见 [Accel.ESRGAN_PAD]。
      */
-    suspend fun upscale4x(model: File, px: IntArray, w: Int, h: Int, tile: Int = 192, onProgress: (Float) -> Unit): IntArray {
+    suspend fun upscale4x(model: File, px: IntArray, w: Int, h: Int, tile: Int = Accel.ESRGAN_TILE, onProgress: (Float) -> Unit): IntArray {
         val s = session(model)
         val out = IntArray(w * 4 * h * 4)
+        val pad = tile + 2 * 12
         val tiles = Tensors.tiles(w, h, tile, 12)
         tiles.forEachIndexed { k, t ->
             coroutineContext.ensureActive()
-            val data = Tensors.tileToChwF32(px, w, t.x, t.y, t.w, t.h)
-            OnnxTensor.createTensor(env, FloatBuffer.wrap(data), longArrayOf(1, 3, t.h.toLong(), t.w.toLong())).use { input ->
+            val data = Tensors.tileToChwF32Clamped(px, w, h, t.x, t.y, pad, pad)
+            val padded = Tensors.Tile(t.x, t.y, pad, pad, t.cx, t.cy, t.cw, t.ch)
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(data), longArrayOf(1, 3, pad.toLong(), pad.toLong())).use { input ->
                 s.run(mapOf("input" to input)).use { r ->
                     val fb = (r.get(0) as OnnxTensor).floatBuffer
                     val arr = FloatArray(fb.remaining()).also { fb.get(it) }
-                    Tensors.putScaledTile(out, w * 4, t, arr, 4, px, w)
+                    Tensors.putScaledTile(out, w * 4, padded, arr, 4, px, w)
                 }
             }
             onProgress((k + 1f) / tiles.size)

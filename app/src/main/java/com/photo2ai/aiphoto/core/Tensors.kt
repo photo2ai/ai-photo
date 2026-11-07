@@ -48,6 +48,23 @@ object Tensors {
         return out
     }
 
+    /** 和 [tileToChwF32] 一样，但范围可以超出图：超出的部分取最近的边缘像素 */
+    fun tileToChwF32Clamped(px: IntArray, w: Int, h: Int, x0: Int, y0: Int, tw: Int, th: Int): FloatArray {
+        val n = tw * th
+        val out = FloatArray(3 * n)
+        for (y in 0 until th) {
+            val row = minOf(y0 + y, h - 1) * w
+            for (x in 0 until tw) {
+                val c = px[row + minOf(x0 + x, w - 1)]
+                val i = y * tw + x
+                out[i] = (c shr 16 and 0xff) / 255f
+                out[n + i] = (c shr 8 and 0xff) / 255f
+                out[2 * n + i] = (c and 0xff) / 255f
+            }
+        }
+        return out
+    }
+
     /**
      * 一块。输入里 [x],[y],[w],[h] 是送进模型的范围（含重叠边），[cx],[cy],[cw],[ch] 是这块实际负责写回的范围（不含重叠）。
      */

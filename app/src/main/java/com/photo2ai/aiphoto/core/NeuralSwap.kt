@@ -70,7 +70,7 @@ object NeuralSwap {
      * 在 [px] 的目标脸上换成 [emb] 的身份，返回新的整图像素。[five] 是目标脸的 5 个关键点；[region] 是原图坐标的
      * 额外蒙版（0..1，比如脸部轮廓，不限制就传 null）；[esrgan] 不为 null 时把换好的脸放大到 512 再贴回去。
      */
-    fun swap(
+    suspend fun swap(
         inswapper: File, emap: FloatArray, esrgan: File?,
         px: IntArray, w: Int, h: Int, five: FloatArray, emb: FloatArray, region: FloatArray?,
     ): IntArray {
@@ -97,17 +97,7 @@ object NeuralSwap {
         var size = 128
         var m = m128
         if (esrgan != null) {
-            val tile = Tensors.Tile(0, 0, 128, 128, 0, 0, 128, 128)
-            val big = IntArray(512 * 512)
-            val es = LocalAi.session(esrgan)
-            OnnxTensor.createTensor(LocalAi.env, FloatBuffer.wrap(Tensors.tileToChwF32(out, 128, 0, 0, 128, 128)), longArrayOf(1, 3, 128, 128)).use { t ->
-                es.run(mapOf(es.inputNames.first() to t)).use { r ->
-                    val fb = (r.get(0) as OnnxTensor).floatBuffer
-                    val f = FloatArray(fb.remaining()).also { fb.get(it) }
-                    Tensors.putScaledTile(big, 512, tile, f, 4, out, 128)
-                }
-            }
-            out = big
+            out = LocalAi.upscale4x(esrgan, out, 128, 128) {}
             size = 512
             m = FloatArray(6) { m128[it] * 4f }
             changed = Pixels.resizeF(changed, 128, 128, 512, 512)

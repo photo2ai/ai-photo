@@ -31,6 +31,8 @@
 
 放在仓库 `models/`（来源、许可、输入输出见 `models/README.md`），第一次用到时下载，和应用内更新同样走镜像 + 续传 + SHA-256 校验（`core/LocalModels.kt`）：MI-GAN 26.8 MB、Real-ESRGAN 4.6 MB。推理用 ONNX Runtime（安装包里只带 arm64 的库，约 13 MB）；人脸网格用 ML Kit（和人像分割共用运行库）。jsDelivr 不收 20 MB 以上的文件，MI-GAN 只能走 gh-proxy、ghfast 和 GitHub 原地址。
 
+**本机 AI 加速**（`core/Accel.kt`）：每个本地模型第一次使用时，在这台手机上分别用 CPU、XNNPACK（ARM 优化的 CPU 计算）、NNAPI（安卓的 AI 芯片接口，全精度 / 半精度）跑同一份合成输入，结果和 CPU 一致（平均误差 < 值域 2%、最大误差 < 30%）且总耗时（建会话 + 单次 × 每次使用的运行次数）比 CPU 快 10% 以上的才采用，记在设置里（按模型校验值区分）。加速方式加载失败会自动退回 CPU。NNAPI 只能编译固定尺寸，所以变清晰的每块都补齐到 216×216，ArcFace 的批量固定为 1；MI-GAN 输入尺寸每次不同，只比较 CPU 和 XNNPACK。设置 → 本机 AI 加速 可以看每个模型的测速结果、关掉加速、重新测试。模拟器上实测：消除选了 XNNPACK（2.1 秒，CPU 3.5 秒），换脸模型的 XNNPACK 结果和 CPU 不一致被自动排除；真机 AI 芯片的效果要在真机上看。
+
 ## 云端 AI 服务设置
 
 设置 → 云端 AI 服务，选火山引擎、Gemini 或 OpenAI 兼容，填 API Key；接口地址、模型可留空用默认：

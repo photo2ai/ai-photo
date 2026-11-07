@@ -40,6 +40,7 @@ import com.google.android.material.slider.Slider
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.photo2ai.aiphoto.R
+import com.photo2ai.aiphoto.core.Accel
 import com.photo2ai.aiphoto.core.Adjust
 import com.photo2ai.aiphoto.core.Cloud
 import com.photo2ai.aiphoto.core.CloudProtocol
@@ -912,7 +913,7 @@ class EditorActivity : AppCompatActivity() {
         // 还有别的处理在跑时 busy() 不会开新任务：先拦下，免得「下载」点了没反应
         if (busyJob?.isActive == true) return toast("请等当前的处理完成")
         val missing = models.filter { LocalModels.ready(this, it) == null }
-        if (missing.isEmpty()) return then(models.map { LocalModels.ready(this, it)!! })
+        if (missing.isEmpty()) return measureThen(models, then)
         val mb = "%.0f".format(missing.sumOf { it.size } / 1048576.0)
         val names = missing.joinToString("、") { it.title }
         MaterialAlertDialogBuilder(this)
@@ -930,11 +931,37 @@ class EditorActivity : AppCompatActivity() {
                     }
                     ok = true
                 }.invokeOnCompletion { e ->
-                    if (e == null && ok) runOnUiThread { then(models.map { LocalModels.ready(this, it)!! }) }
+                    if (e == null && ok) runOnUiThread { measureThen(models, then) }
                 }
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /**
+     * 模型都就绪后：这台手机上还没测过的，先测一次用 CPU 还是 AI 芯片更快（每个模型只测一次，几秒到几十秒），再执行 [then]。
+     * 测速出错不影响使用，按 CPU 来。
+     */
+    private fun measureThen(models: List<LocalModels.Model>, then: (List<File>) -> Unit) {
+        val files = models.map { LocalModels.ready(this, it)!! }
+        val todo = models.filter { !Accel.measured(it) }
+        if (todo.isEmpty() || !LocalModels.supported()) return then(files)
+        var done = false
+        busy("正在测试这台手机的 AI 加速…\n每个模型只测一次") {
+            withContext(Dispatchers.Default) {
+                todo.forEachIndexed { k, m ->
+                    runOnUiThread { busyText.text = "正在测试这台手机的 AI 加速（${k + 1}/${todo.size}）…\n每个模型只测一次" }
+                    try {
+                        Accel.benchmark(m, files[models.indexOf(m)])
+                    } catch (e: Exception) {
+                        android.util.Log.w("AIPhoto", "benchmark ${m.file} failed", e)
+                        Store.setAccel(m.sha256, Accel.Backend.CPU.name, m.title + "：CPU（测速出错）")
+                    }
+                }
+            }
+            LocalAi.releaseAll()
+            done = true
+        }.invokeOnCompletion { e -> if (e == null && done) runOnUiThread { then(files) } }
     }
 
     private inner class CutoutTool : Tool("人像抠图") {

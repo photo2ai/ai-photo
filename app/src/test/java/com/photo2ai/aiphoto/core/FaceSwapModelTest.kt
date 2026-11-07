@@ -103,7 +103,9 @@ class FaceSwapModelTest {
         val womanFive = floatArrayOf(666f, 708f, 902f, 710f, 780f, 828f, 678f, 930f, 882f, 930f)
         val emb = NeuralSwap.embedding(arc, wp, ww, wh, womanFive)
         assertEquals(512, emb.size)
-        val out = NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), File("../models/realesr-general-x4v3.onnx"), mp, mw, mh, manFive, emb, null)
+        val out = kotlinx.coroutines.runBlocking {
+            NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), File("../models/realesr-general-x4v3.onnx"), mp, mw, mh, manFive, emb, null)
+        }
         var changed = 0
         for (y in 850 until 1100) for (x in 600 until 900) if (abs(Pixels.luma(out[y * mw + x]) - Pixels.luma(mp[y * mw + x])) > 8) changed++
         assertTrue("脸部改动的像素 $changed", changed > 20000)

@@ -66,6 +66,23 @@ object Store {
         get() = p.getLong("last_update_check", 0)
         set(v) = p.edit().putLong("last_update_check", v).apply()
 
+    /** 本地模型用不用 AI 芯片加速（默认用；关了一律 CPU） */
+    var accelEnabled: Boolean
+        get() = p.getBoolean("accel_enabled", true)
+        set(v) = p.edit().putBoolean("accel_enabled", v).apply()
+
+    /** 某个模型（按校验值区分）在这台手机上测出来该用的方式；没测过为 null */
+    fun accelChoice(sha: String) = p.getString("accel_" + sha.take(16), null)
+    fun accelSummary(sha: String) = p.getString("accel_sum_" + sha.take(16), "").orEmpty()
+    fun setAccel(sha: String, backend: String, summary: String) =
+        p.edit().putString("accel_" + sha.take(16), backend).putString("accel_sum_" + sha.take(16), summary).apply()
+
+    fun clearAccel() {
+        val e = p.edit()
+        for (k in p.all.keys) if (k.startsWith("accel_") && k != "accel_enabled") e.remove(k)
+        e.apply()
+    }
+
     /** 用户确认过「换脸只用于本人或已获同意的照片」 */
     var faceConsent: Boolean
         get() = p.getBoolean("face_consent", false)
