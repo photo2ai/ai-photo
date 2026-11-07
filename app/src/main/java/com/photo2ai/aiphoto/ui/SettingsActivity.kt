@@ -143,6 +143,11 @@ class SettingsActivity : AppCompatActivity() {
         Store.setModel(shown, model.text?.toString().orEmpty())
     }
 
+    override fun onResume() {
+        super.onResume()
+        UpdateUi.resume(this)
+    }
+
     override fun onPause() {
         super.onPause()
         save()

@@ -362,6 +362,10 @@ class EditorActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (modelDialog != null) {
+            modelDialog = null
+            ModelDownloads.detached(this)
+        }
         if (isFinishing) history.clear()
     }
 
@@ -914,36 +918,96 @@ class EditorActivity : AppCompatActivity() {
     private fun withModel(m: LocalModels.Model, then: (File) -> Unit) = withModels(listOf(m), null) { then(it[0]) }
 
     /**
-     * 用本地模型前确认都已下载：缺的一起提示总大小（[note] 是额外说明，比如许可），确认后依次下载（进度显示在忙碌框里，
-     * 可以取消，下次续传），全部就绪后执行 [then]，参数顺序和 [models] 一致。
+     * 用本地模型前确认都已下载：缺的一起提示总大小（[note] 是额外说明，比如许可），确认后交给 [ModelDownloads] 下载。
+     * 进度弹窗不收起就一直等，下完接着执行 [then]（参数顺序和 [models] 一致）；收起了（后台下载）就不再自动执行，
+     * 下完发通知，用户再点一次即可。
      */
     private fun withModels(models: List<LocalModels.Model>, note: String?, then: (List<File>) -> Unit) {
         // 还有别的处理在跑时 busy() 不会开新任务：先拦下，免得「下载」点了没反应
         if (busyJob?.isActive == true) return toast("请等当前的处理完成")
+        if (ModelDownloads.running) {
+            // 正在下（可能是刚才收到后台的）：要的就是这一批就把进度拿出来接着等，否则先等那一批下完
+            if (models.any { it in ModelDownloads.models }) return showModelProgress { measureThen(models, then) }
+            return toast("正在下载其它模型，下完再用这个功能")
+        }
         val missing = models.filter { LocalModels.ready(this, it) == null }
         if (missing.isEmpty()) return measureThen(models, then)
         val mb = "%.0f".format(missing.sumOf { it.size } / 1048576.0)
+        val kept = missing.sumOf { LocalModels.partialBytes(this, it) }
         val names = missing.joinToString("、") { it.title }
         MaterialAlertDialogBuilder(this)
             .setTitle("下载模型")
-            .setMessage("第一次使用需要下载$names，共约 $mb MB，只下载一次，之后离线可用。建议在 Wi-Fi 下下载。" + (note?.let { "\n\n$it" } ?: ""))
-            .setPositiveButton("下载") { _, _ ->
+            .setMessage(
+                "第一次使用需要下载$names，共约 $mb MB，只下载一次，之后离线可用。建议在 Wi-Fi 下下载，可以放到后台下。" +
+                    (if (kept > 0) "\n已下载 %.1f MB，会接着下。".format(kept / 1048576.0) else "") +
+                    (note?.let { "\n\n$it" } ?: ""),
+            )
+            .setPositiveButton(if (kept > 0) "继续下载" else "下载") { _, _ ->
                 if (busyJob?.isActive == true) return@setPositiveButton toast("请等当前的处理完成")
-                var ok = false
-                busy("正在下载模型…", cancellable = true) {
-                    missing.forEachIndexed { k, m ->
-                        val step = if (missing.size > 1) "（${k + 1}/${missing.size}）" else ""
-                        LocalModels.download(this, m) { done, total ->
-                            if (total > 0) runOnUiThread { busyText.text = "正在下载${m.title}$step… ${done * 100 / total}%" }
-                        }
-                    }
-                    ok = true
-                }.invokeOnCompletion { e ->
-                    if (e == null && ok) runOnUiThread { measureThen(models, then) }
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
                 }
+                ModelDownloads.start(this, missing)
+                showModelProgress { measureThen(models, then) }
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    private var modelDialog: androidx.appcompat.app.AlertDialog? = null
+
+    /** 模型下载的进度弹窗：「后台下载」收起（之后由通知显示进度），「取消」停止（已下的部分留着续传） */
+    private fun showModelProgress(onDone: () -> Unit) {
+        modelDialog?.dismiss()
+        val bar = com.google.android.material.progressindicator.LinearProgressIndicator(this).apply { isIndeterminate = true; max = 100 }
+        val label = TextView(this).apply { setPadding(0, dp(10), 0, 0) }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), 0)
+            addView(bar)
+            addView(label)
+        }
+        var waiting = true
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("正在下载模型")
+            .setView(box)
+            .setCancelable(false)
+            .setPositiveButton("后台下载") { _, _ -> toast("在后台下载，好了会通知你") }
+            .setNegativeButton("取消") { _, _ -> ModelDownloads.cancel() }
+            .setOnDismissListener {
+                if (modelDialog === it) modelDialog = null
+                // 收起或取消：不再等这一批的结果
+                if (waiting) {
+                    waiting = false
+                    ModelDownloads.detached(this)
+                }
+            }
+            .show()
+        modelDialog = dialog
+        val show = { st: ModelDownloads.State ->
+            if (st.finished) {
+                val wasWaiting = waiting
+                waiting = false
+                ModelDownloads.listener = null
+                dialog.dismiss()
+                when {
+                    st.error == "已取消" -> Unit
+                    st.error != null -> alert("模型下载中断", st.error)
+                    wasWaiting && !isFinishing -> onDone()
+                }
+            } else {
+                dialog.setTitle("正在下载" + st.label)
+                if (st.percent >= 0) {
+                    bar.isIndeterminate = false
+                    bar.setProgressCompat(st.percent, true)
+                }
+                label.text = "%.1f / %.1f MB".format(st.done / 1048576.0, maxOf(st.total, st.done) / 1048576.0)
+            }
+        }
+        ModelDownloads.listener = show
+        ModelDownloads.state?.let(show)
     }
 
     /**
@@ -1126,7 +1190,6 @@ class EditorActivity : AppCompatActivity() {
     private var editStamp = 0L to 0L
 
     private val systemEditor = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r -> onSystemEditDone(r.data?.data) }
-    private val pickEdited = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? -> uri?.let { importEdited(it) } }
 
     /**
      * 把当前照片交给手机自带的修图（小米、华为、OPPO 等的相册编辑器，或 Google 相册）：用它们的 AI 消除、AI 扩图等
@@ -1183,7 +1246,7 @@ class EditorActivity : AppCompatActivity() {
                 .setTitle("导入修好的照片")
                 .setMessage("如果在相册里修好并保存了，选那张照片导入回来，可以接着编辑（撤销还能回到修之前）。")
                 .setPositiveButton("选择照片") { _, _ ->
-                    pickEdited.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    pickPhoto { importEdited(it) }
                 }
                 .setNegativeButton("没有修改", null)
                 .show()
@@ -1209,7 +1272,7 @@ class EditorActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) { ImageIO.decode(this@EditorActivity, uri) }
             } catch (e: SecurityException) {
                 // 返回的地址我们没有读权限：改为让用户自己选
-                pickEdited.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                pickPhoto { importEdited(it) }
                 return@busy
             }
             commit(b)
@@ -1351,11 +1414,20 @@ class EditorActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------- 参考照片（换脸、换装）
 
+    /**
+     * 整个编辑页只注册一个照片选择器，选完交给这次调用传进来的回调。部分国产系统的相册对同一页面注册的第二个选择器
+     * 会直接返回取消（借鉴自另一个修图项目的踩坑记录），所以参考照、导入相册修好的照片都走这一个。
+     */
     private var pickRef: ((Uri) -> Unit)? = null
-    private val refPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
+    private val picker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         val cb = pickRef
         pickRef = null
         if (uri != null) cb?.invoke(uri)
+    }
+
+    private fun pickPhoto(then: (Uri) -> Unit) {
+        pickRef = then
+        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
 
     /**
@@ -1388,7 +1460,7 @@ class EditorActivity : AppCompatActivity() {
             addView(thumb, LinearLayout.LayoutParams(dp(64), dp(64)))
             addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             setOnClickListener {
-                pickRef = { uri ->
+                pickPhoto { uri ->
                     busy("正在读取照片…") {
                         val b = withContext(Dispatchers.IO) { ImageIO.fit(ImageIO.decode(this@EditorActivity, uri), 1024) }
                         thumb.setPadding(0, 0, 0, 0)
@@ -1398,7 +1470,6 @@ class EditorActivity : AppCompatActivity() {
                         onChange(b)
                     }
                 }
-                refPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             }
         }
     }

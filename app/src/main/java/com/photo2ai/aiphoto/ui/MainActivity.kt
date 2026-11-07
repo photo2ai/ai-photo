@@ -146,6 +146,11 @@ class MainActivity : AppCompatActivity() {
         UpdateUi.autoCheck(this)
     }
 
+    override fun onResume() {
+        super.onResume()
+        UpdateUi.resume(this)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString("tool", pendingTool)

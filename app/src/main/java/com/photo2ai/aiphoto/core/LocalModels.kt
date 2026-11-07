@@ -62,7 +62,9 @@ object LocalModels {
         val d = dir(context)
         val part = File(d, m.file + ".part")
         val target = File(d, m.file)
-        val sources = listOf("https://hf-mirror.com/" + m.hfPath, "https://huggingface.co/" + m.hfPath) + (if (m.inRepo) listOf(BASE + m.file) else emptyList())
+        // hf-mirror 中途超时多是一时的：先再试一次它，不行再换（GitHub 镜像国内只有十几 KB/s，放最后）
+        val mirror = "https://hf-mirror.com/" + m.hfPath
+        val sources = listOf(mirror, mirror, "https://huggingface.co/" + m.hfPath) + (if (m.inRepo) listOf(BASE + m.file) else emptyList())
         var last: Exception? = null
         for (url in sources) {
             try {
@@ -78,6 +80,9 @@ object LocalModels {
         }
         throw last ?: IllegalStateException("下载失败")
     }
+
+    /** 上次中断留下的字节数，下次从这里续传 */
+    fun partialBytes(context: Context, m: Model): Long = File(dir(context), m.file + ".part").length()
 
     /** 模型文件坏了（加载失败）：删掉，下次用时重新下载 */
     fun discard(file: File) {
