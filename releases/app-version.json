@@ -1,9 +1,9 @@
 {
-  "versionCode": 6,
-  "versionName": "1.0.5",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.5.apk",
-  "sha256": "6cef08e5f486ac4cf1e29c472714d1601e7bb803f24d072237b6b4a021518e5f",
-  "size": 28440541,
-  "notes": "新增本机 AI 加速：本地消除、变清晰、高清换脸会在你的手机上自动测试 CPU 和 AI 芯片，选结果正确又最快的方式（每个模型只测一次，可在设置里查看和关闭）。",
+  "versionCode": 7,
+  "versionName": "1.0.6",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.6.apk",
+  "sha256": "8b5c991dbf88746cb976c9f2838a4d0769a7d5f26f8b5cc11a6a3a8d69a2eb50",
+  "size": 28440597,
+  "notes": "新增「相册修图」：把照片交给手机自带的相册修图（小米、华为、OPPO 等），用它们的 AI 消除、AI 扩图，修完导回来接着编辑。",
   "force": false
 }

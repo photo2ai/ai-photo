@@ -8,6 +8,14 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- 「用系统相册修图」要列出能编辑图片的应用（安卓 11 起要声明才看得到别的应用） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="image/*" />
+        </intent>
+    </queries>
+
     <!-- allowBackup=false：API Key 不进系统备份；usesCleartextTraffic：允许填局域网里的 http 兼容接口 -->
     <application
         android:name=".App"

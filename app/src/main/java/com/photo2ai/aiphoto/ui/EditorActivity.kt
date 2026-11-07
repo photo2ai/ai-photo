@@ -2,6 +2,8 @@ package com.photo2ai.aiphoto.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -11,6 +13,7 @@ import android.graphics.Outline
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
@@ -80,6 +83,9 @@ class EditorActivity : AppCompatActivity() {
         const val TOOL_CROP = "crop"
         const val TOOL_FACE = "face"
         const val TOOL_UPSCALE = "upscale"
+
+        /** 不是编辑页里的工具：把照片交给系统相册的修图，修完导入回来 */
+        const val TOOL_SYSTEM = "system"
         const val TOOL_OUTFIT = "outfit"
 
         /** 预览图（显示、实时预览都用它）的长边 */
@@ -374,6 +380,7 @@ class EditorActivity : AppCompatActivity() {
         ToolDef(TOOL_ADJUST, R.drawable.ic_tune, "调整"),
         ToolDef(TOOL_FILTER, R.drawable.ic_filter, "滤镜"),
         ToolDef(TOOL_CROP, R.drawable.ic_crop, "裁剪"),
+        ToolDef(TOOL_SYSTEM, R.drawable.ic_gallery, "相册修图"),
     )
 
     private fun buildToolBar() {
@@ -403,6 +410,7 @@ class EditorActivity : AppCompatActivity() {
 
     private fun openTool(id: String) {
         if (tool != null || current == null || busyJob?.isActive == true) return
+        if (id == TOOL_SYSTEM) return systemEdit()
         val t = when (id) {
             TOOL_ENHANCE -> EnhanceTool()
             TOOL_AI -> AiTool()
@@ -1109,6 +1117,92 @@ class EditorActivity : AppCompatActivity() {
         }
 
         override suspend fun result(): Bitmap? = pending
+    }
+
+    // ---------------------------------------------------------------- 用系统相册修图
+
+    /** 交出去的文件和当时输入文件的修改时间、大小：回来时变了说明修图应用直接改了它 */
+    private var editFiles: ImageIO.EditFiles? = null
+    private var editStamp = 0L to 0L
+
+    private val systemEditor = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r -> onSystemEditDone(r.data?.data) }
+    private val pickEdited = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? -> uri?.let { importEdited(it) } }
+
+    /**
+     * 把当前照片交给手机自带的修图（小米、华为、OPPO 等的相册编辑器，或 Google 相册）：用它们的 AI 消除、AI 扩图等
+     * 我们调不到的功能，修完再导入回来。只有一个修图应用就直接打开，多个就让用户选（不列出我们自己）。
+     */
+    private fun systemEdit() {
+        val b = current ?: return
+        busy("正在准备…") {
+            val ef = withContext(Dispatchers.IO) { ImageIO.editFiles(this@EditorActivity, b) }
+            // 输入只给读权限：给了写权限的话，有的修图应用（如 Markup）一打开就以写方式打开原图，把它清空
+            val intent = Intent(Intent.ACTION_EDIT)
+                .setDataAndType(ef.inputUri, ef.mime)
+                .putExtra(MediaStore.EXTRA_OUTPUT, ef.outputUri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val handlers = packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != packageName }
+            if (handlers.isEmpty()) {
+                alert("没有可用的系统修图", "这台手机上没有能编辑图片的相册应用。")
+                return@busy
+            }
+            // 输出文件的写权限单独授给每个候选应用
+            for (h in handlers) {
+                grantUriPermission(h.activityInfo.packageName, ef.outputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+            editFiles = ef
+            editStamp = ef.input.lastModified() to ef.input.length()
+            val launch = if (handlers.size == 1) {
+                intent.setClassName(handlers[0].activityInfo.packageName, handlers[0].activityInfo.name)
+            } else {
+                Intent.createChooser(intent, "用哪个应用修图")
+                    .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(this@EditorActivity, EditorActivity::class.java)))
+            }
+            try {
+                systemEditor.launch(launch)
+            } catch (e: ActivityNotFoundException) {
+                alert("没有可用的系统修图", "这台手机上没有能编辑图片的相册应用。")
+            }
+        }
+    }
+
+    /**
+     * 修图应用回来了。各家保存方式不同：有的把新照片的地址返回给我们，有的写进我们给的输出文件，有的直接改输入文件，
+     * 有的另存到相册、什么都不告诉我们。前三种自动导入（空文件不算）；第四种请用户在相册里选刚修好的那张。
+     */
+    private fun onSystemEditDone(returned: Uri?) {
+        val ef = editFiles ?: return
+        editFiles = null
+        val inputChanged = ef.input.length() > 0 && (ef.input.lastModified() != editStamp.first || ef.input.length() != editStamp.second)
+        when {
+            returned != null && returned != ef.inputUri && returned != ef.outputUri -> importEdited(returned)
+            ef.output.length() > 0 -> importEdited(Uri.fromFile(ef.output))
+            inputChanged -> importEdited(Uri.fromFile(ef.input))
+            else -> MaterialAlertDialogBuilder(this)
+                .setTitle("导入修好的照片")
+                .setMessage("如果在相册里修好并保存了，选那张照片导入回来，可以接着编辑（撤销还能回到修之前）。")
+                .setPositiveButton("选择照片") { _, _ ->
+                    pickEdited.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                .setNegativeButton("没有修改", null)
+                .show()
+        }
+    }
+
+    private fun importEdited(uri: Uri) {
+        busy("正在导入…") {
+            val b = try {
+                withContext(Dispatchers.IO) { ImageIO.decode(this@EditorActivity, uri) }
+            } catch (e: SecurityException) {
+                // 返回的地址我们没有读权限：改为让用户自己选
+                pickEdited.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                return@busy
+            }
+            commit(b)
+            photo.setImage(preview)
+            updateButtons()
+            flashInfo("已导入修好的照片（${b.width} × ${b.height}），可以接着编辑", 4000)
+        }
     }
 
     private fun askConfigure() {

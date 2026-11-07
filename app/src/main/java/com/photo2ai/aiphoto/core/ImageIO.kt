@@ -135,6 +135,29 @@ object ImageIO {
         return "相册 / $ALBUM / $name"
     }
 
+    class EditFiles(val input: File, val inputUri: Uri, val output: File, val outputUri: Uri, val mime: String)
+
+    /**
+     * 交给系统相册编辑的文件，在缓存目录 share/edit 下：一个是要编辑的照片（有透明像素存 PNG，否则 JPEG），
+     * 一个是空的「修好后存到这里」。两个必须分开：有的修图应用一打开就以写方式打开输出文件（会清空它），
+     * 和输入是同一个文件的话它就读不到照片了。
+     */
+    fun editFiles(context: Context, b: Bitmap): EditFiles {
+        val png = b.hasAlpha() && Pixels.hasTransparency(pixels(b))
+        val ext = if (png) ".png" else ".jpg"
+        val dir = File(context.cacheDir, "share/edit").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val stamp = System.currentTimeMillis()
+        val input = File(dir, "AIPhoto_$stamp$ext").apply { writeBytes(encode(b, png)) }
+        val output = File(dir, "AIPhoto_${stamp}_edited$ext").apply { createNewFile() }
+        val auth = context.packageName + ".files"
+        return EditFiles(
+            input, FileProvider.getUriForFile(context, auth, input),
+            output, FileProvider.getUriForFile(context, auth, output),
+            if (png) "image/png" else "image/jpeg",
+        )
+    }
+
     /** 写到缓存目录，返回给分享用的 content:// 地址 */
     fun shareUri(context: Context, b: Bitmap): Uri {
         val png = b.hasAlpha() && Pixels.hasTransparency(pixels(b))
