@@ -4,7 +4,20 @@ local.properties
 *.apk
 !releases/*.apk
 .idea/
+# macOS 系统文件
 .DS_Store
+._*
+.AppleDouble
+.LSOverride
+Icon
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.DocumentRevisions-V100
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.apdisk
 .codegraph/
 # Kotlin 编译器的会话数据
 .kotlin/
