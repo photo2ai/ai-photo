@@ -11,18 +11,26 @@ import java.io.File
  */
 object LocalModels {
     /**
-     * [hfPath] 是模型在 Hugging Face 上的原始位置（仓库/resolve/版本/文件）。[inRepo] 为 true 时本仓库 models/ 里也有一份
-     * （同一个文件），作为最后的下载来源；换脸的两个大模型只从 Hugging Face 下。
+     * [hfPath] 是模型在 Hugging Face 上的原始位置（仓库/resolve/版本/文件），null 表示 Hugging Face 上没有（我们自己量化的），
+     * 只从本仓库下。[inRepo] 为 true 时本仓库 models/ 里也有一份（同一个文件），作为最后的下载来源；换脸的两个大模型只从
+     * Hugging Face 下。[replaces] 是这个模型取代的旧文件，新的下好后从手机上删掉。
      */
-    class Model(val file: String, val sha256: String, val size: Long, val title: String, val hfPath: String, val inRepo: Boolean = true)
+    class Model(
+        val file: String, val sha256: String, val size: Long, val title: String, val hfPath: String?,
+        val inRepo: Boolean = true, val replaces: String? = null,
+    )
 
     val MIGAN = Model(
         "migan-pipeline-v2.onnx", "6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b", 28_079_181, "AI 消除模型",
         "andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx",
     )
+    /**
+     * 变清晰：Real-ESRGAN 的 INT8 量化版（体积约 3.5 分之一，CPU 上快 2 倍多，和原模型的输出差 40 dB 以上，看不出来）。
+     * 做法见 models/README.md。Hugging Face 上没有，只从本仓库下（1.4 MB，gh-proxy 慢的时候也就一两分钟）。
+     */
     val ESRGAN = Model(
-        "realesr-general-x4v3.onnx", "7b10e80021ec3e0ff35017ae5022791879d93a799b2e201e1010a37510202266", 4_866_420, "变清晰模型",
-        "vlad-grig/realesr-general-x4v3-onnx/resolve/main/onnx/model.onnx",
+        "realesr-general-x4v3-int8.onnx", "da89a87d6254e20c97751e708645bc4d7daf15840be2c54f65ee36cd12f3bc2b", 1_406_805, "变清晰模型", null,
+        replaces = "realesr-general-x4v3.onnx",
     )
 
     /** 高清换脸：ArcFace 身份特征模型（InsightFace，仅限非商业使用） */
@@ -63,13 +71,16 @@ object LocalModels {
         val part = File(d, m.file + ".part")
         val target = File(d, m.file)
         // hf-mirror 中途超时多是一时的：先再试一次它，不行再换（GitHub 镜像国内只有十几 KB/s，放最后）
-        val mirror = "https://hf-mirror.com/" + m.hfPath
-        val sources = listOf(mirror, mirror, "https://huggingface.co/" + m.hfPath) + (if (m.inRepo) listOf(BASE + m.file) else emptyList())
+        val hf = m.hfPath?.let { listOf("https://hf-mirror.com/$it", "https://hf-mirror.com/$it", "https://huggingface.co/$it") } ?: emptyList()
+        val repo = if (m.inRepo) listOf(BASE + m.file) else emptyList()
+        // 只在本仓库的模型：镜像一时连不上就再试一轮
+        val sources = hf + repo + (if (hf.isEmpty()) repo else emptyList())
         var last: Exception? = null
         for (url in sources) {
             try {
                 val f = AppUpdate.downloadVerified(url, m.sha256, m.size, part, target, onProgress)
                 File(d, m.file + ".ok").writeText(m.sha256)
+                m.replaces?.let { old -> File(d, old).delete(); File(d, "$old.ok").delete(); File(d, "$old.part").delete() }
                 return f
             } catch (e: CancellationException) {
                 throw e

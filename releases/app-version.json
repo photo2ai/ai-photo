@@ -1,9 +1,9 @@
 {
-  "versionCode": 9,
-  "versionName": "1.0.8",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.8.apk",
-  "sha256": "24eaac5885233e0c7820ea6b2842b558231e3449051ddeb7b2460a84461f7654",
+  "versionCode": 10,
+  "versionName": "1.0.9",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.9.apk",
+  "sha256": "76e7e15f4a4f77e703ef30f562315208ab6b2054486c17320e8de45673a5411f",
   "size": 28457093,
-  "notes": "新增人像美颜：磨皮、美白、瘦脸、大眼，只作用在脸部皮肤上，合照里每张脸一起处理，全部在手机上完成。",
+  "notes": "变清晰换成更小更快的模型（下载 4.9 MB → 1.4 MB，放大快约一倍），效果基本不变。",
   "force": false
 }

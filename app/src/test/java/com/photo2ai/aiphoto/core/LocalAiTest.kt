@@ -54,4 +54,25 @@ class LocalAiTest {
         for (i in whole.indices) maxDiff = maxOf(maxDiff, abs(Pixels.luma(whole[i]) - Pixels.luma(tiled[i])))
         assertTrue("分块拼接和整张算的差别 $maxDiff", maxDiff <= 12)
     }
+
+    /**
+     * 量化版和原模型（仓库里留着的浮点版）输出的差别。这里用的人工棋盘格是量化最吃亏的输入（照片上实测 43 dB 左右，
+     * 棋盘格 30.6 dB），阈值 28 只防模型文件被换坏
+     */
+    @Test
+    fun esrganInt8CloseToFloat() = runBlocking {
+        val w = 64
+        val h = 48
+        val px = gradient(w, h)
+        for (i in px.indices) if ((i % w) / 5 % 2 == (i / w) / 5 % 2) px[i] = px[i] xor 0x303030
+        val a = LocalAi.upscale4x(File(models, "realesr-general-x4v3.onnx"), px, w, h, tile = 512) {}
+        val b = LocalAi.upscale4x(File(models, LocalModels.ESRGAN.file), px, w, h, tile = 512) {}
+        var se = 0.0
+        for (i in a.indices) for (sh in intArrayOf(16, 8, 0)) {
+            val d = ((a[i] shr sh) and 0xff) - ((b[i] shr sh) and 0xff)
+            se += d * d
+        }
+        val psnr = 10 * kotlin.math.log10(255.0 * 255.0 / (se / (a.size * 3)))
+        assertTrue("PSNR $psnr", psnr > 28)
+    }
 }
