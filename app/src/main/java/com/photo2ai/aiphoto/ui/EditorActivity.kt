@@ -1174,9 +1174,7 @@ class EditorActivity : AppCompatActivity() {
         val ef = editFiles ?: return
         editFiles = null
         val inputChanged = ef.input.length() > 0 && (ef.input.lastModified() != editStamp.first || ef.input.length() != editStamp.second)
-        // 返回的地址只认别的应用提供的 content://：file:// 或指向我们自己 FileProvider 的地址，可能是恶意应用
-        // 想让我们读入自己的私有文件（我们自己的输入、输出文件下面按内部路径直接读）
-        val foreign = returned?.takeIf { it.scheme == "content" && it.authority != "$packageName.files" }
+        val foreign = returned?.takeIf { fromOtherApp(it) }
         when {
             foreign != null -> importEdited(foreign)
             ef.output.length() > 0 -> importEdited(Uri.fromFile(ef.output))
@@ -1190,6 +1188,19 @@ class EditorActivity : AppCompatActivity() {
                 .setNegativeButton("没有修改", null)
                 .show()
         }
+    }
+
+    /**
+     * 修图应用返回的地址只认别的应用提供的 content://。file:// 或指向我们自己 provider 的地址，可能是恶意应用
+     * 想让我们读入自己的私有文件（我们自己的输入、输出文件按内部路径直接读，不走这里）。
+     * 不比较字符串：authority 可以带「用户编号@」前缀绕过，所以带 @ 的直接拒绝，其余让系统查出它实际属于哪个应用。
+     */
+    private fun fromOtherApp(uri: Uri): Boolean {
+        if (uri.scheme != "content") return false
+        val authority = uri.authority ?: return false
+        if ('@' in authority) return false
+        val owner = packageManager.resolveContentProvider(authority, 0)?.packageName ?: return false
+        return owner != packageName
     }
 
     private fun importEdited(uri: Uri) {
