@@ -1174,8 +1174,11 @@ class EditorActivity : AppCompatActivity() {
         val ef = editFiles ?: return
         editFiles = null
         val inputChanged = ef.input.length() > 0 && (ef.input.lastModified() != editStamp.first || ef.input.length() != editStamp.second)
+        // 返回的地址只认别的应用提供的 content://：file:// 或指向我们自己 FileProvider 的地址，可能是恶意应用
+        // 想让我们读入自己的私有文件（我们自己的输入、输出文件下面按内部路径直接读）
+        val foreign = returned?.takeIf { it.scheme == "content" && it.authority != "$packageName.files" }
         when {
-            returned != null && returned != ef.inputUri && returned != ef.outputUri -> importEdited(returned)
+            foreign != null -> importEdited(foreign)
             ef.output.length() > 0 -> importEdited(Uri.fromFile(ef.output))
             inputChanged -> importEdited(Uri.fromFile(ef.input))
             else -> MaterialAlertDialogBuilder(this)
