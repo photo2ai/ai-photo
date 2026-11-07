@@ -1569,7 +1569,7 @@ class EditorActivity : AppCompatActivity() {
         override fun cloudNote(cfg: Store.Cloud) = if (cloudMode) super.cloudNote(cfg) else localNote()
 
         private fun localNote() = if (mode == 0) {
-            "高清换脸用本地神经网络模型（第一次使用下载约 430 MB），照片不会上传；模型来自 InsightFace，仅限非商业使用"
+            "高清换脸用本地神经网络模型（第一次使用下载约 220 MB），照片不会上传；模型来自 InsightFace，仅限非商业使用"
         } else {
             "快速换脸不用下载模型，照片不会上传；正脸、角度相近的两张照片效果最好"
         }

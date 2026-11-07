@@ -33,16 +33,19 @@ object LocalModels {
         replaces = "realesr-general-x4v3.onnx",
     )
 
-    /** 高清换脸：ArcFace 身份特征模型（InsightFace，仅限非商业使用） */
+    /**
+     * 高清换脸：ArcFace 身份特征模型的 INT8 量化版（InsightFace，仅限非商业使用）。原版 174 MB；量化版和原版同一张脸的特征
+     * 相似度 0.99。放在我们自己的 Hugging Face 仓库（scripts/quantize_faceswap.py 生成，做法见 models/README.md）
+     */
     val ARCFACE = Model(
-        "arcface_w600k_r50.onnx", "f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1", 174_388_474, "人脸特征模型",
-        "facefusion/models-3.0.0/resolve/main/arcface_w600k_r50.onnx", inRepo = false,
+        "arcface_w600k_r50_int8.onnx", "43deedbae06600d32b569046c29bb9aee94f34d1be79a88f033e653383f96d8d", 43_977_929, "人脸特征模型",
+        "Lakes0001/ai-photo-models/resolve/main/arcface_w600k_r50_int8.onnx", inRepo = false, replaces = "arcface_w600k_r50.onnx",
     )
 
-    /** 高清换脸：inswapper 半精度（InsightFace，仅限非商业使用） */
+    /** 高清换脸：inswapper 只量化卷积的 INT8 版（原版半精度 277 MB，换出的脸和原版几乎一样，CPU 上快约 10 倍）。来源同上 */
     val INSWAPPER = Model(
-        "inswapper_128_fp16.onnx", "c4eccca86ad177586c85c28bf1a64a9d9ed237e283a15818d831f7facfd3f420", 277_680_829, "换脸模型",
-        "facefusion/models-3.0.0/resolve/main/inswapper_128_fp16.onnx", inRepo = false,
+        "inswapper_128_int8.onnx", "1a2c7ad36b25d214c4cab89acf109db00829894aafa6710845c9e554e9473bc8", 177_474_191, "换脸模型",
+        "Lakes0001/ai-photo-models/resolve/main/inswapper_128_int8.onnx", inRepo = false, replaces = "inswapper_128_fp16.onnx",
     )
 
     private const val BASE = "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/models/"
@@ -51,6 +54,20 @@ object LocalModels {
     fun supported(): Boolean = Build.SUPPORTED_64_BIT_ABIS.contains("arm64-v8a")
 
     private fun dir(context: Context) = File(context.filesDir, "models").apply { mkdirs() }
+
+    private fun deleteWithMarkers(d: File, name: String) {
+        for (suffix in listOf("", ".ok", ".part")) File(d, name + suffix).delete()
+    }
+
+    /**
+     * 删掉被新模型取代的旧文件（[Model.replaces]），启动时调用：新版 App 用不到它们，老用户升级后不该等到下载新模型
+     * 才腾出空间（换脸的旧模型有 450 MB）
+     */
+    fun removeReplaced(context: Context) {
+        val d = File(context.filesDir, "models")
+        if (!d.isDirectory) return
+        for (m in listOf(MIGAN, ESRGAN, ARCFACE, INSWAPPER)) m.replaces?.let { deleteWithMarkers(d, it) }
+    }
 
     /**
      * 已经下载好就返回文件，否则 null。下载时校验通过才写 `.ok` 标记（内容是校验值），这里认标记，
@@ -80,7 +97,7 @@ object LocalModels {
             try {
                 val f = AppUpdate.downloadVerified(url, m.sha256, m.size, part, target, onProgress)
                 File(d, m.file + ".ok").writeText(m.sha256)
-                m.replaces?.let { old -> File(d, old).delete(); File(d, "$old.ok").delete(); File(d, "$old.part").delete() }
+                m.replaces?.let { deleteWithMarkers(d, it) }
                 return f
             } catch (e: CancellationException) {
                 throw e

@@ -8,7 +8,7 @@ App 第一次用到对应功能时下载，先试 hf-mirror.com（模型原本�
 | `realesr-general-x4v3-int8.onnx` | 「变清晰」放大、高清换脸里把脸放大到 512（1.0.9 起） | 下面这个模型的 INT8 量化版，见下文 | BSD-3-Clause（`LICENSE-Real-ESRGAN`） |
 | `realesr-general-x4v3.onnx` | 1.0.8 及以前的「变清晰」（老版本还会来这里下，不能删） | [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) v0.2.5.0，ONNX 来自 [vlad-grig/realesr-general-x4v3-onnx](https://huggingface.co/vlad-grig/realesr-general-x4v3-onnx) | BSD-3-Clause（`LICENSE-Real-ESRGAN`） |
 
-另外两个高清换脸模型太大（166 MB、265 MB），不放在这里，只从 Hugging Face 下载（[facefusion/models-3.0.0](https://huggingface.co/facefusion/models-3.0.0)，hf-mirror 优先）：
+另外两个高清换脸模型太大，不放在这里，只从 Hugging Face 下载。1.0.9 及以前用原版（[facefusion/models-3.0.0](https://huggingface.co/facefusion/models-3.0.0)），1.0.10 起用我们的 INT8 版（见下文「INT8 量化」）：
 
 | 文件 | 用途 | 许可 |
 |---|---|---|
@@ -27,9 +27,9 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 试过但没采用：
 - MI-GAN（消除）：只量化卷积，28 MB → 11 MB、快约 1.5 倍，但补出来的区域发灰、有斑块（以原照片为准，涂抹区 PSNR 31.4 → 27.4 dB）；颜色相关的层保持浮点、补图区低频颜色用 push-pull 校正都只能补回不到 1 dB
 
-### 高清换脸的两个模型（已做好，等托管）
+### 高清换脸的两个模型（1.0.10 起使用）
 
-`scripts/quantize_faceswap.py` 生成（用法见脚本开头；两次运行结果相同）：
+`scripts/quantize_faceswap.py` 生成（用法见脚本开头；两次运行结果相同），放在 Hugging Face 仓库 [Lakes0001/ai-photo-models](https://huggingface.co/Lakes0001/ai-photo-models)（App 经 hf-mirror 下载）：
 
 | 文件 | 体积 | SHA-256 | 做法 |
 |---|---|---|---|
@@ -42,6 +42,4 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 - 踩过的坑：inswapper 全部量化（含身份注入部分）139 MB，但胡子出斑块、嘴唇发虚（0.872）；校准时加翻转、亮度变化或「自己换自己」，量化范围被撑宽，只剩 0.76。所以只量化卷积、只用两人互换 + 关键点抖动校准
 - 局限：校准和评估只有两个人（thispersondoesnotexist 现在返回网页，拿不到更多人脸），换到别的脸上的效果没有量过
 
-没接进 App 的原因：现在从 facefusion 的 Hugging Face 仓库下载，量化版没地方放（GitHub 单文件上限 100 MB，镜像每秒十几 KB）；InsightFace 只许非商业使用，公开放出改过的模型要先确认。
-
-**以后启用**：把两个文件传到自己的 Hugging Face 公开仓库，改 `LocalModels.ARCFACE` / `INSWAPPER` 的文件名、校验值、大小（上表）和 `hfPath`（`<用户>/<仓库>/resolve/main/<文件>`），加 `replaces` 指向旧文件名；`EditorActivity` 里「下载约 430 MB」改成约 220 MB。单测 `FaceSwapModelTest.neuralSwapInt8MatchesFloat` 在本机 `/tmp/aiphoto-models/q/` 有这两个文件时会核对 emap 和换脸结果。
+换模型时：重新生成后传到上面的仓库（同名覆盖会让老版本 App 校验失败，所以改名再传），改 `LocalModels.ARCFACE` / `INSWAPPER` 的文件名、校验值、大小、`hfPath`、`replaces`，以及 `EditorActivity` 里写的下载大小。单测 `FaceSwapModelTest.neuralSwapInt8MatchesFloat` 在本机 `/tmp/aiphoto-models/q/` 有这两个文件时会核对 emap 和换脸结果。
