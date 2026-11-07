@@ -26,6 +26,22 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 
 试过但没采用：
 - MI-GAN（消除）：只量化卷积，28 MB → 11 MB、快约 1.5 倍，但补出来的区域发灰、有斑块（以原照片为准，涂抹区 PSNR 31.4 → 27.4 dB）；颜色相关的层保持浮点、补图区低频颜色用 push-pull 校正都只能补回不到 1 dB
-- ArcFace（换脸身份特征）：全量化 174 MB → 44 MB、快 3 倍，和浮点版特征的余弦相似度平均 0.98（最低 0.96）
-- inswapper（换脸）：先把半精度转回 fp32 再量化。按 5 点对齐的脸上比较：全部量化 139 MB、快 3.5 倍，但胡子出斑块、嘴唇发虚，换出的脸像提供者的程度 0.913 → 0.872；只量化卷积 176 MB、快 2.7 倍，和浮点版肉眼看不出差别（0.906，31 dB）
-- 两个换脸模型的量化版没接进 App：它们现在从 facefusion 的 Hugging Face 仓库下载，量化版没有国内能快速下载的地方放（GitHub 单文件上限 100 MB，镜像每秒十几 KB）；InsightFace 只许非商业使用，改过的模型公开放出去算不算再分发要另外确认
+
+### 高清换脸的两个模型（已做好，等托管）
+
+`scripts/quantize_faceswap.py` 生成（用法见脚本开头；两次运行结果相同）：
+
+| 文件 | 体积 | SHA-256 | 做法 |
+|---|---|---|---|
+| `arcface_w600k_r50_int8.onnx` | 43,977,929（原 174 MB） | `43deedbae06600d32b569046c29bb9aee94f34d1be79a88f033e653383f96d8d` | 全部量化，Percentile 校准，校准用对齐后的脸加翻转、亮度变化 |
+| `inswapper_128_int8.onnx` | 177,474,191（原 277 MB） | `1a2c7ad36b25d214c4cab89acf109db00829894aafa6710845c9e554e9473bc8` | 半精度转回 fp32 后只量化卷积；emap 放回最后一个 initializer（App 按这个位置读） |
+
+效果（电脑 CPU；两张测试照片互换，评估样本带校准时没见过的翻转、亮度变化）：
+- ArcFace：和原模型同一张脸的特征相似度 0.992，快约 3 倍
+- 整条流程：换出的脸像提供脸的人，原模型这一对 0.909、INT8 这一对 0.900；两者输出 32 dB；inswapper 快约 2.7 倍
+- 踩过的坑：inswapper 全部量化（含身份注入部分）139 MB，但胡子出斑块、嘴唇发虚（0.872）；校准时加翻转、亮度变化或「自己换自己」，量化范围被撑宽，只剩 0.76。所以只量化卷积、只用两人互换 + 关键点抖动校准
+- 局限：校准和评估只有两个人（thispersondoesnotexist 现在返回网页，拿不到更多人脸），换到别的脸上的效果没有量过
+
+没接进 App 的原因：现在从 facefusion 的 Hugging Face 仓库下载，量化版没地方放（GitHub 单文件上限 100 MB，镜像每秒十几 KB）；InsightFace 只许非商业使用，公开放出改过的模型要先确认。
+
+**以后启用**：把两个文件传到自己的 Hugging Face 公开仓库，改 `LocalModels.ARCFACE` / `INSWAPPER` 的文件名、校验值、大小（上表）和 `hfPath`（`<用户>/<仓库>/resolve/main/<文件>`），加 `replaces` 指向旧文件名；`EditorActivity` 里「下载约 430 MB」改成约 220 MB。单测 `FaceSwapModelTest.neuralSwapInt8MatchesFloat` 在本机 `/tmp/aiphoto-models/q/` 有这两个文件时会核对 emap 和换脸结果。

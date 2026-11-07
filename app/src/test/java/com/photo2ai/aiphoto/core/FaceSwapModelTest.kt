@@ -85,30 +85,65 @@ class FaceSwapModelTest {
         assertArrayEquals(floatArrayOf(1.5f, -2f, 0.25f, 4f), OnnxInitializer.last(f, 4), 0f)
     }
 
+    private val man = File("/tmp/aiphoto-dl/portrait.jpg")
+    private val woman = File("/tmp/aiphoto-dl/street.jpg")
+    private val manFive = floatArrayOf(588f, 820f, 902f, 811f, 758f, 1008f, 636f, 1158f, 882f, 1154f)
+    private val womanFive = floatArrayOf(666f, 708f, 902f, 710f, 780f, 828f, 678f, 930f, 882f, 930f)
+
+    private fun read(f: File): Triple<IntArray, Int, Int> {
+        val im = javax.imageio.ImageIO.read(f)
+        return Triple(im.getRGB(0, 0, im.width, im.height, null, 0, im.width), im.width, im.height)
+    }
+
+    /** 女人的脸换到男人照片上，返回整张结果（男人照片的尺寸） */
+    private fun swap(arc: File, insw: File): IntArray {
+        val (mp, mw, mh) = read(man)
+        val (wp, ww, wh) = read(woman)
+        val emb = NeuralSwap.embedding(arc, wp, ww, wh, womanFive)
+        assertEquals(512, emb.size)
+        return kotlinx.coroutines.runBlocking {
+            NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), File("../models/" + LocalModels.ESRGAN.file), mp, mw, mh, manFive, emb, null)
+        }.also {
+            LocalAi.release(arc)
+            LocalAi.release(insw)
+        }
+    }
+
     /** 真模型（电脑上有才跑，模型太大不放进仓库）：参考脸换到目标脸上，脸部变了、远处不变 */
     @Test
     fun neuralSwapChangesFaceOnly() {
         val arc = File("/tmp/aiphoto-models/arcface_w600k_r50.onnx")
         val insw = File("/tmp/aiphoto-models/inswapper_128_fp16.onnx")
-        val man = File("/tmp/aiphoto-dl/portrait.jpg")
-        val woman = File("/tmp/aiphoto-dl/street.jpg")
         assumeTrue(arc.isFile && insw.isFile && man.isFile && woman.isFile)
-        fun read(f: File): Triple<IntArray, Int, Int> {
-            val im = javax.imageio.ImageIO.read(f)
-            return Triple(im.getRGB(0, 0, im.width, im.height, null, 0, im.width), im.width, im.height)
-        }
-        val (mp, mw, mh) = read(man)
-        val (wp, ww, wh) = read(woman)
-        val manFive = floatArrayOf(588f, 820f, 902f, 811f, 758f, 1008f, 636f, 1158f, 882f, 1154f)
-        val womanFive = floatArrayOf(666f, 708f, 902f, 710f, 780f, 828f, 678f, 930f, 882f, 930f)
-        val emb = NeuralSwap.embedding(arc, wp, ww, wh, womanFive)
-        assertEquals(512, emb.size)
-        val out = kotlinx.coroutines.runBlocking {
-            NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), File("../models/" + LocalModels.ESRGAN.file), mp, mw, mh, manFive, emb, null)
-        }
+        val out = swap(arc, insw)
+        val (mp, mw, _) = read(man)
         var changed = 0
         for (y in 850 until 1100) for (x in 600 until 900) if (abs(Pixels.luma(out[y * mw + x]) - Pixels.luma(mp[y * mw + x])) > 8) changed++
         assertTrue("脸部改动的像素 $changed", changed > 20000)
         for (y in 0 until 200) for (x in 0 until mw) assertEquals(mp[y * mw + x], out[y * mw + x])
+    }
+
+    /**
+     * INT8 量化版（scripts/quantize_faceswap.py 生成到 /tmp/aiphoto-models/q/，有才跑）：emap 要和原模型的一模一样
+     * （App 按「最后一个 initializer」读，量化工具会打乱顺序，脚本负责放回去），换出来的脸和原模型一对的结果接近
+     */
+    @Test
+    fun neuralSwapInt8MatchesFloat() {
+        val arc = File("/tmp/aiphoto-models/arcface_w600k_r50.onnx")
+        val insw = File("/tmp/aiphoto-models/inswapper_128_fp16.onnx")
+        val arc8 = File("/tmp/aiphoto-models/q/arcface_w600k_r50_int8.onnx")
+        val insw8 = File("/tmp/aiphoto-models/q/inswapper_128_int8.onnx")
+        assumeTrue(arc.isFile && insw.isFile && arc8.isFile && insw8.isFile && man.isFile && woman.isFile)
+        assertArrayEquals(NeuralSwap.emapOf(insw), NeuralSwap.emapOf(insw8), 0f)
+        val a = swap(arc, insw)
+        val b = swap(arc8, insw8)
+        val (_, mw, _) = read(man)
+        var diff = 0L
+        var n = 0
+        for (y in 850 until 1100) for (x in 600 until 900) {
+            diff += abs(Pixels.luma(a[y * mw + x]) - Pixels.luma(b[y * mw + x]))
+            n++
+        }
+        assertTrue("脸部平均亮度差 ${diff.toFloat() / n}", diff.toFloat() / n < 6f)
     }
 }
