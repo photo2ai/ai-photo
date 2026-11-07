@@ -6,3 +6,12 @@ local.properties
 .idea/
 .DS_Store
 .codegraph/
+# Kotlin 编译器的会话数据
+.kotlin/
+# Python 缓存（scripts/ 里的量化脚本被导入时生成）
+__pycache__/
+*.pyc
+# ONNX 量化工具落在当前目录的中间文件（只忽略根目录，models/ 里的模型照常提交）
+/*.onnx
+/*.data
+*.exposed.onnx
