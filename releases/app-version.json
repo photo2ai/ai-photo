@@ -2,8 +2,8 @@
   "versionCode": 13,
   "versionName": "1.0.12",
   "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.12.apk",
-  "sha256": "0f5aac4f8573e9c3b9ac9ab26f3e3151b5148503321549337a57b2a8286d4053",
+  "sha256": "793fd7336b71c1526cd7a597000ba0a3c532b48294b7140d49c37f1dafb91c3b",
   "size": 28457093,
-  "notes": "换脸模型升级：换出来的脸更干净、更像提供脸的人，胡子等痕迹基本没有了。第一次使用需要重新下载换脸模型（约 190 MB），旧模型会自动删掉。",
+  "notes": "高清换脸效果大幅改进：换脸模型升级，换完再用人脸修复模型修一遍，眼睛、牙齿、皮肤都更自然，胡子等痕迹基本没有了，也更像提供脸的人。第一次使用需要下载新的换脸和人脸修复模型（约 355 MB），旧模型会自动删掉。",
   "force": false
 }

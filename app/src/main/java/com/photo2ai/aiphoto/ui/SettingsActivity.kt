@@ -70,7 +70,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun showAccel() {
         val lines = localModels.filter { LocalModels.ready(this, it) != null }.map { m ->
-            if (!Accel.benchmarks(m)) m.title + "：CPU（这个模型加速不了，不用测）"
+            if (!Accel.benchmarks(m)) m.title + "：CPU（这个模型不测速，固定用 CPU）"
             else Store.accelSummary(m.sha256).ifEmpty { m.title + "：还没测，第一次使用时自动测" }
         }
         val head = when {

@@ -27,7 +27,7 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 试过但没采用：
 - MI-GAN（消除）：只量化卷积，28 MB → 11 MB、快约 1.5 倍，但补出来的区域发灰、有斑块（以原照片为准，涂抹区 PSNR 31.4 → 27.4 dB）；颜色相关的层保持浮点、补图区低频颜色用 push-pull 校正都只能补回不到 1 dB
 
-### 高清换脸的两个模型（1.0.10 起使用）
+### 高清换脸的两个模型（ArcFace 1.0.10 起使用；inswapper 只用到 1.0.11，1.0.12 起换成 HyperSwap，见下文）
 
 `scripts/quantize_faceswap.py` 生成（用法见脚本开头；两次运行结果相同），放在 Hugging Face 仓库 [Lakes0001/ai-photo-models](https://huggingface.co/Lakes0001/ai-photo-models)（App 经 hf-mirror 下载）：
 
