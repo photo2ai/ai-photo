@@ -7,25 +7,12 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * 高清换脸（本地神经网络），和 FaceFusion 的默认流程一致：ArcFace 取参考脸的身份特征 → inswapper 在目标脸（对齐到
- * 128×128）上换成这个身份，按软边方框整块贴回 → GFPGAN 把整张脸（对齐到 512×512）修复清楚，和修复前按 8:2 混合贴回。
- * inswapper 只输出 128×128，又会在眼睛、牙齿、胡子上留瑕疵，不修复的话又糊又假；ArcFace / inswapper 只允许非商业使用。
+ * 高清换脸（本地神经网络），和 FaceFusion 的流程一致：ArcFace 取参考脸的身份特征 → HyperSwap 在目标脸（按 arcface_128
+ * 模板对齐到 256×256）上换成这个身份，按软边方框整块贴回 → GFPGAN 把整张脸（对齐到 512×512）修复清楚，和修复前按 8:2
+ * 混合贴回。1.0.12 起换脸模型从 inswapper（128×128，眼睛、牙齿、胡子上瑕疵多）换成 HyperSwap（256×256，干净、更像本人）；
+ * 256 的输出放到照片里几百像素宽的脸上仍然偏软、牙齿有瑕疵，所以还接着 GFPGAN。对比见 models/README.md
  */
 object NeuralSwap {
-    private var emapCache: Pair<String, FloatArray>? = null
-
-    /**
-     * inswapper 的 emap（512×512 矩阵）存在模型文件里最后一个 initializer 中（FaceFusion 也是这样取的）。
-     * 直接从下载好的模型文件里按 protobuf 格式找出来，不另外托管这份从模型导出的数据。
-     */
-    @Synchronized
-    fun emapOf(model: File): FloatArray {
-        emapCache?.let { if (it.first == model.path) return it.second }
-        val e = OnnxInitializer.last(model, 512 * 512)
-        emapCache = model.path to e
-        return e
-    }
-
     /** 参考脸的 ArcFace 特征（512 维，已归一化）。[five] 是原图里的 5 个关键点 */
     fun embedding(arcface: File, px: IntArray, w: Int, h: Int, five: FloatArray): FloatArray {
         val m = FaceAlign.similarity(five, FaceAlign.ARCFACE_112)
@@ -55,47 +42,39 @@ object NeuralSwap {
         return FloatArray(v.size) { v[it] * k }
     }
 
-    /** inswapper 要的 source：特征乘 emap 再归一化 */
-    fun latent(emb: FloatArray, emap: FloatArray): FloatArray {
-        val out = FloatArray(512)
-        for (j in 0 until 512) {
-            var s = 0f
-            for (i in 0 until 512) s += emb[i] * emap[i * 512 + j]
-            out[j] = s
-        }
-        return normalize(out)
-    }
+    /** HyperSwap 的输入尺寸和对齐模板（ArcFace 128 模板放大到 256，和 FaceFusion 的 arcface_128 一致） */
+    private const val SIZE = 256
+    private val TEMPLATE = FaceAlign.scaled(FaceAlign.ARCFACE_128, SIZE / 128f)
 
     /**
-     * 在 [px] 的目标脸上换成 [emb] 的身份，返回新的整图像素。[five] 是目标脸的 5 个关键点；[region] 是原图坐标的
-     * 额外蒙版（0..1，比如脸部轮廓，不限制就传 null）；[enhancer] 不为 null 时再用 GFPGAN 修复整张脸（见 [enhance]）。
+     * 在 [px] 的目标脸上换成 [emb]（[embedding] 算出的归一化特征）的身份，返回新的整图像素。[five] 是目标脸的
+     * 5 个关键点；[region] 是原图坐标的额外蒙版（0..1，不限制就传 null）。模型输入输出都是 RGB、值域 -1..1。
      */
-    suspend fun swap(
-        inswapper: File, emap: FloatArray, enhancer: File?,
-        px: IntArray, w: Int, h: Int, five: FloatArray, emb: FloatArray, region: FloatArray?,
-    ): IntArray {
-        val m128 = FaceAlign.similarity(five, FaceAlign.ARCFACE_128)
-        val face = FaceAlign.warp(px, w, h, m128, 128, 128)
-        val target = Tensors.tileToChwF32(face, 128, 0, 0, 128, 128)
-        val s = LocalAi.session(inswapper)
-        val names = s.inputNames.toList()
-        val tName = names.firstOrNull { it.contains("target") } ?: names[0]
-        val sName = names.firstOrNull { it.contains("source") } ?: names[1]
-        var out: IntArray
-        OnnxTensor.createTensor(LocalAi.env, FloatBuffer.wrap(target), longArrayOf(1, 3, 128, 128)).use { tt ->
-            OnnxTensor.createTensor(LocalAi.env, FloatBuffer.wrap(latent(emb, emap)), longArrayOf(1, 512)).use { st ->
-                s.run(mapOf(tName to tt, sName to st)).use { r ->
+    fun swap(model: File, px: IntArray, w: Int, h: Int, five: FloatArray, emb: FloatArray, region: FloatArray?): IntArray {
+        val n = SIZE * SIZE
+        val m = FaceAlign.similarity(five, TEMPLATE)
+        val face = FaceAlign.warp(px, w, h, m, SIZE, SIZE)
+        val input = FloatArray(3 * n)
+        for (i in 0 until n) {
+            val c = face[i]
+            input[i] = (c shr 16 and 0xff) / 127.5f - 1f
+            input[n + i] = (c shr 8 and 0xff) / 127.5f - 1f
+            input[2 * n + i] = (c and 0xff) / 127.5f - 1f
+        }
+        val s = LocalAi.session(model)
+        val out = OnnxTensor.createTensor(LocalAi.env, FloatBuffer.wrap(input), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())).use { t ->
+            OnnxTensor.createTensor(LocalAi.env, FloatBuffer.wrap(emb), longArrayOf(1, emb.size.toLong())).use { e ->
+                s.run(mapOf("target" to t, "source" to e)).use { r ->
+                    // 第一个输出是换好的脸（另一个是人脸区域蒙版，FaceFusion 也不用）
                     val fb = (r.get(0) as OnnxTensor).floatBuffer
-                    val f = FloatArray(fb.remaining()).also { fb.get(it) }
-                    out = IntArray(128 * 128)
-                    Tensors.putScaledTile(out, 128, Tensors.Tile(0, 0, 128, 128, 0, 0, 128, 128), f, 1, face, 128)
+                    val o = FloatArray(fb.remaining()).also { fb.get(it) }
+                    fun v(x: Float) = Pixels.clamp255((x.coerceIn(-1f, 1f) + 1f) * 127.5f)
+                    IntArray(n) { i -> Pixels.ALPHA or (v(o[i]) shl 16) or (v(o[n + i]) shl 8) or v(o[2 * n + i]) }
                 }
             }
         }
-        // 整块贴回（软边方框，和 FaceFusion 默认一样）：模型对脸以外的地方基本原样输出。只贴「改动过」的区域会让
-        // 改动小的地方变成新旧皮肤各一半的斑块
-        val swapped = pasteBack(px, w, h, out, 128, m128, region)
-        return if (enhancer != null) enhance(enhancer, swapped, w, h, five, region) else swapped
+        // 整块贴回（软边方框，和 FaceFusion 默认一样）：模型对脸以外的地方基本原样输出
+        return pasteBack(px, w, h, out, SIZE, m, region)
     }
 
     /**

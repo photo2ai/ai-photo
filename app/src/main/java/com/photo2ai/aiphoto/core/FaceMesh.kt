@@ -148,10 +148,10 @@ object FaceMesh {
     }
 
     /**
-     * 高清换脸（神经网络）：ArcFace 取参考脸的身份，inswapper 换到目标脸上，GFPGAN 修复整张脸（见 [NeuralSwap]）。
+     * 高清换脸（神经网络）：ArcFace 取参考脸的身份，HyperSwap 换到目标脸上，GFPGAN 修复整张脸（见 [NeuralSwap]）。
      * 三个模型先后加载、用完就释放，同时占用的内存不超过一个。
      */
-    suspend fun neuralSwap(target: Bitmap, ref: Bitmap, arcface: java.io.File, inswapper: java.io.File, enhancer: java.io.File): Bitmap {
+    suspend fun neuralSwap(target: Bitmap, ref: Bitmap, arcface: java.io.File, swapper: java.io.File, enhancer: java.io.File): Bitmap {
         val (dstFace, srcFace) = detectBoth(target, ref)
         return withContext(Dispatchers.Default) {
             val emb = try {
@@ -159,17 +159,17 @@ object FaceMesh {
             } finally {
                 LocalAi.release(arcface)
             }
-            // 裁剪块要盖住人脸修复的整个对齐窗口（约 4 倍眼距见方，头歪时转了角度更大），否则修复结果贴回时
-            // 会在裁剪块边上切出一道直线接缝
+            // 裁剪块要盖住人脸修复的整个对齐窗口（约 4 倍眼距见方，头歪时转了角度更大），否则修复时窗口外的部分
+            // 只能用边缘像素填
             val window = FaceAlign.backBounds(FaceAlign.similarity(dstFace.five(), FaceAlign.FFHQ_512), 512, target.width, target.height)
             val c = crop(target, dstFace, 0.6f, window)
             val five = FloatArray(10) { if (it % 2 == 0) dstFace.five()[it] - c.x0 else dstFace.five()[it] - c.y0 }
             // 贴回只用对齐空间里的羽化方框（和 FaceFusion 默认一样）：模型对脸以外的地方基本原样输出，
             // 再按脸部轮廓裁会在下巴、胡子上切出一道断口
             val swapped = try {
-                NeuralSwap.swap(inswapper, NeuralSwap.emapOf(inswapper), null, c.px, c.w, c.h, five, emb, null)
+                NeuralSwap.swap(swapper, c.px, c.w, c.h, five, emb, null)
             } finally {
-                LocalAi.release(inswapper)
+                LocalAi.release(swapper)
             }
             val enhanced = try {
                 NeuralSwap.enhance(enhancer, swapped, c.w, c.h, five, null)

@@ -44,8 +44,8 @@ object Accel {
         LocalModels.MIGAN -> Spec(emptyMap(), false, 1, listOf("image" to longArrayOf(1, 3, 512, 512), "mask" to longArrayOf(1, 1, 512, 512)))
         // GFPGAN 不测、固定用 CPU：卷积权重是按风格向量现算的（不是常量），NNAPI、XNNPACK 都帮不上；它一个会话跑起来
         // 就要 800 MB，测速要先后建好几个，2.5 GB 内存的模拟器上直接被系统杀掉。
-        // inswapper（INT8）也不测：CPU 上 1 秒多，模拟器上几种加速的结果都和 CPU 对不上；测它要载入 4 遍 177 MB 的模型，
-        // 第一次换脸时测完紧接着跑 GFPGAN，释放的内存来不及还给系统，2.5 GB 的模拟器上 App 被杀（占用 1.6 GB）
+        // HyperSwap 也不测、固定用 CPU：2 亿参数，测速要先后载入好几遍；第一次换脸时测完紧接着跑，释放的内存来不及还给系统，
+        // 2.5 GB 的模拟器上 App 会被杀（1.0.11 测 inswapper 时踩过）
         else -> null
     }
 
@@ -72,6 +72,9 @@ object Accel {
             setOptimizationLevel(
                 if (modelOf(file) == LocalModels.GFPGAN) OrtSession.SessionOptions.OptLevel.NO_OPT else OrtSession.SessionOptions.OptLevel.ALL_OPT,
             )
+            // HyperSwap 的中间结果很大（256×256 上上千个通道）：内存复用规划会按整张图一次性预留，电脑上实测跑一次的峰值
+            // 1093 → 705 MB，速度不变
+            if (modelOf(file) == LocalModels.HYPERSWAP) setMemoryPatternOptimization(false)
             when (backend) {
                 Backend.CPU -> setIntraOpNumThreads(threads)
                 Backend.XNNPACK -> {
@@ -186,7 +189,7 @@ object Accel {
 
 /** 加速选择里的纯计算（可单测） */
 object AccelMath {
-    /** 确定性的测试输入：图像是 0..1 的平滑波纹；[unitVector] 时归一化成单位向量（inswapper 的 source） */
+    /** 确定性的测试输入：图像是 0..1 的平滑波纹；[unitVector] 时归一化成单位向量（换脸模型的 source） */
     fun signal(n: Int, unitVector: Boolean): FloatArray {
         val v = FloatArray(n) { (0.5 + 0.45 * sin(it * 0.0137 + (it / 97) * 0.31)).toFloat() }
         if (!unitVector) return v

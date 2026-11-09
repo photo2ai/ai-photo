@@ -17,7 +17,7 @@ object LocalModels {
      */
     class Model(
         val file: String, val sha256: String, val size: Long, val title: String, val hfPath: String?,
-        val inRepo: Boolean = true, val replaces: String? = null,
+        val inRepo: Boolean = true, val replaces: List<String> = emptyList(),
     )
 
     val MIGAN = Model(
@@ -30,7 +30,7 @@ object LocalModels {
      */
     val ESRGAN = Model(
         "realesr-general-x4v3-int8.onnx", "da89a87d6254e20c97751e708645bc4d7daf15840be2c54f65ee36cd12f3bc2b", 1_406_805, "变清晰模型", null,
-        replaces = "realesr-general-x4v3.onnx",
+        replaces = listOf("realesr-general-x4v3.onnx"),
     )
 
     /**
@@ -39,13 +39,18 @@ object LocalModels {
      */
     val ARCFACE = Model(
         "arcface_w600k_r50_int8.onnx", "43deedbae06600d32b569046c29bb9aee94f34d1be79a88f033e653383f96d8d", 43_977_929, "人脸特征模型",
-        "Lakes0001/ai-photo-models/resolve/main/arcface_w600k_r50_int8.onnx", inRepo = false, replaces = "arcface_w600k_r50.onnx",
+        "Lakes0001/ai-photo-models/resolve/main/arcface_w600k_r50_int8.onnx", inRepo = false, replaces = listOf("arcface_w600k_r50.onnx"),
     )
 
-    /** 高清换脸：inswapper 只量化卷积的 INT8 版（原版半精度 277 MB，换出的脸和原版几乎一样，CPU 上快约 10 倍）。来源同上 */
-    val INSWAPPER = Model(
-        "inswapper_128_int8.onnx", "1a2c7ad36b25d214c4cab89acf109db00829894aafa6710845c9e554e9473bc8", 177_474_191, "换脸模型",
-        "Lakes0001/ai-photo-models/resolve/main/inswapper_128_int8.onnx", inRepo = false, replaces = "inswapper_128_fp16.onnx",
+    /**
+     * 高清换脸：HyperSwap 1c（FaceFusion 团队训练，256×256；原版半精度 403 MB）只量化权重的 INT8 版（和原版差 51 dB 以上）。
+     * 换出的脸比 inswapper 干净、更像本人，后面仍接 GFPGAN 修复。scripts/convert_hyperswap.py 生成，放在我们的 Hugging Face 仓库；
+     * 模型许可没有写明
+     */
+    val HYPERSWAP = Model(
+        "hyperswap_1c_256_w8.onnx", "702ec8e5dd1b45a89abe366c5815262e49789ba770353e29c5043de036e5b949", 202_061_901, "换脸模型",
+        "Lakes0001/ai-photo-models/resolve/main/hyperswap_1c_256_w8.onnx", inRepo = false,
+        replaces = listOf("inswapper_128_fp16.onnx", "inswapper_128_int8.onnx"),
     )
 
     /**
@@ -58,7 +63,7 @@ object LocalModels {
     )
 
     /** 所有本地模型（设置页、本机 AI 加速、启动清理都按这个列表） */
-    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, INSWAPPER, GFPGAN)
+    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, HYPERSWAP, GFPGAN)
 
     private const val BASE = "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/models/"
 
@@ -78,7 +83,7 @@ object LocalModels {
     fun removeReplaced(context: Context) {
         val d = File(context.filesDir, "models")
         if (!d.isDirectory) return
-        for (m in ALL) m.replaces?.let { deleteWithMarkers(d, it) }
+        for (m in ALL) m.replaces.forEach { deleteWithMarkers(d, it) }
     }
 
     /**
@@ -109,7 +114,7 @@ object LocalModels {
             try {
                 val f = AppUpdate.downloadVerified(url, m.sha256, m.size, part, target, onProgress)
                 File(d, m.file + ".ok").writeText(m.sha256)
-                m.replaces?.let { deleteWithMarkers(d, it) }
+                m.replaces.forEach { deleteWithMarkers(d, it) }
                 return f
             } catch (e: CancellationException) {
                 throw e

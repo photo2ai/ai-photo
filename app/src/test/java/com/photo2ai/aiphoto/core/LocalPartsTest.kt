@@ -119,6 +119,6 @@ class LocalPartsTest {
     fun replacedModelFilesAreNotInUse() {
         val all = LocalModels.ALL
         val inUse = all.map { it.file }.toSet()
-        for (m in all) m.replaces?.let { org.junit.Assert.assertFalse("${m.file} 取代的 $it 还在用", it in inUse) }
+        for (m in all) for (old in m.replaces) org.junit.Assert.assertFalse("${m.file} 取代的 $old 还在用", old in inUse)
     }
 }

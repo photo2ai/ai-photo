@@ -56,40 +56,9 @@ class FaceSwapModelTest {
     }
 
     /** 手工拼一个最小的 ONNX：graph 里两个 initializer，取最后一个 */
-    @Test
-    fun readsLastInitializer() {
-        fun varint(o: ByteArrayOutputStream, v: Long) {
-            var x = v
-            while (x >= 0x80) { o.write(((x and 0x7f) or 0x80).toInt()); x = x ushr 7 }
-            o.write(x.toInt())
-        }
-        fun lenField(o: ByteArrayOutputStream, f: Int, b: ByteArray) { varint(o, (f.toLong() shl 3) or 2); varint(o, b.size.toLong()); o.write(b) }
-        fun tensor(values: FloatArray): ByteArray {
-            val o = ByteArrayOutputStream()
-            varint(o, (1L shl 3) or 0); varint(o, values.size.toLong())        // dims
-            varint(o, (2L shl 3) or 0); varint(o, 1)                            // data_type = FLOAT
-            lenField(o, 8, "w".toByteArray())                                   // name
-            val raw = ByteBuffer.allocate(values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
-            values.forEach { raw.putFloat(it) }
-            lenField(o, 9, raw.array())                                         // raw_data
-            return o.toByteArray()
-        }
-        val graph = ByteArrayOutputStream()
-        lenField(graph, 1, ByteArray(300) { 7 })                                // 一个 node，跳过
-        lenField(graph, 5, tensor(floatArrayOf(9f, 9f, 9f)))
-        lenField(graph, 5, tensor(floatArrayOf(1.5f, -2f, 0.25f, 4f)))
-        val model = ByteArrayOutputStream()
-        varint(model, (1L shl 3) or 0); varint(model, 8)                        // ir_version
-        lenField(model, 7, graph.toByteArray())
-        val f = File.createTempFile("tiny", ".onnx").apply { writeBytes(model.toByteArray()); deleteOnExit() }
-        assertArrayEquals(floatArrayOf(1.5f, -2f, 0.25f, 4f), OnnxInitializer.last(f, 4), 0f)
-    }
-
     private val man = File("/tmp/aiphoto-dl/portrait.jpg")
     private val woman = File("/tmp/aiphoto-dl/street.jpg")
     private val manFive = floatArrayOf(588f, 820f, 902f, 811f, 758f, 1008f, 636f, 1158f, 882f, 1154f)
-    /** 人脸修复模型（scripts/convert_gfpgan_fp16.py 生成），本机有就一起测修复这一步 */
-    private val gfpgan = File("/tmp/aiphoto-models/q/" + LocalModels.GFPGAN.file)
     private val womanFive = floatArrayOf(666f, 708f, 902f, 710f, 780f, 828f, 678f, 930f, 882f, 930f)
 
     private fun read(f: File): Triple<IntArray, Int, Int> {
@@ -98,27 +67,26 @@ class FaceSwapModelTest {
     }
 
     /** 女人的脸换到男人照片上，返回整张结果（男人照片的尺寸） */
-    private fun swap(arc: File, insw: File): IntArray {
+    private fun swap(arc: File, swapper: File): IntArray {
         val (mp, mw, mh) = read(man)
         val (wp, ww, wh) = read(woman)
         val emb = NeuralSwap.embedding(arc, wp, ww, wh, womanFive)
         assertEquals(512, emb.size)
-        return kotlinx.coroutines.runBlocking {
-            NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), gfpgan.takeIf { it.isFile }, mp, mw, mh, manFive, emb, null)
-        }.also {
+        return NeuralSwap.swap(swapper, mp, mw, mh, manFive, emb, null).also {
             LocalAi.release(arc)
-            LocalAi.release(insw)
-            LocalAi.release(gfpgan)
+            LocalAi.release(swapper)
         }
     }
 
-    /** 真模型（电脑上有才跑，模型太大不放进仓库）：参考脸换到目标脸上，脸部变了、远处不变 */
+    /** 原版 HyperSwap（半精度，FaceFusion 发布的那个文件）和人脸特征模型；电脑上有才跑，模型太大不放进仓库 */
+    private val arc = File("/tmp/aiphoto-models/arcface_w600k_r50.onnx")
+    private val hyper = File("/tmp/aiphoto-models/cand/hyperswap_1c_256.onnx")
+
+    /** 真模型：参考脸换到目标脸上，脸部变了、远处不变 */
     @Test
     fun neuralSwapChangesFaceOnly() {
-        val arc = File("/tmp/aiphoto-models/arcface_w600k_r50.onnx")
-        val insw = File("/tmp/aiphoto-models/inswapper_128_fp16.onnx")
-        assumeTrue(arc.isFile && insw.isFile && man.isFile && woman.isFile)
-        val out = swap(arc, insw)
+        assumeTrue(arc.isFile && hyper.isFile && man.isFile && woman.isFile)
+        val out = swap(arc, hyper)
         val (mp, mw, _) = read(man)
         var changed = 0
         for (y in 850 until 1100) for (x in 600 until 900) if (abs(Pixels.luma(out[y * mw + x]) - Pixels.luma(mp[y * mw + x])) > 8) changed++
@@ -127,19 +95,16 @@ class FaceSwapModelTest {
     }
 
     /**
-     * INT8 量化版（scripts/quantize_faceswap.py 生成到 /tmp/aiphoto-models/q/，有才跑）：emap 要和原模型的一模一样
-     * （App 按「最后一个 initializer」读，量化工具会打乱顺序，脚本负责放回去），换出来的脸和原模型一对的结果接近
+     * App 用的量化版（ArcFace INT8 + HyperSwap 只量化权重，scripts/ 下的脚本生成到 /tmp/aiphoto-models/q/，有才跑）：
+     * 换出来的脸和原版一对的结果接近
      */
     @Test
-    fun neuralSwapInt8MatchesFloat() {
-        val arc = File("/tmp/aiphoto-models/arcface_w600k_r50.onnx")
-        val insw = File("/tmp/aiphoto-models/inswapper_128_fp16.onnx")
-        val arc8 = File("/tmp/aiphoto-models/q/arcface_w600k_r50_int8.onnx")
-        val insw8 = File("/tmp/aiphoto-models/q/inswapper_128_int8.onnx")
-        assumeTrue(arc.isFile && insw.isFile && arc8.isFile && insw8.isFile && man.isFile && woman.isFile)
-        assertArrayEquals(NeuralSwap.emapOf(insw), NeuralSwap.emapOf(insw8), 0f)
-        val a = swap(arc, insw)
-        val b = swap(arc8, insw8)
+    fun neuralSwapQuantizedMatchesOriginal() {
+        val arc8 = File("/tmp/aiphoto-models/q/" + LocalModels.ARCFACE.file)
+        val hyper8 = File("/tmp/aiphoto-models/q/" + LocalModels.HYPERSWAP.file)
+        assumeTrue(arc.isFile && hyper.isFile && arc8.isFile && hyper8.isFile && man.isFile && woman.isFile)
+        val a = swap(arc, hyper)
+        val b = swap(arc8, hyper8)
         val (_, mw, _) = read(man)
         var diff = 0L
         var n = 0
@@ -147,6 +112,6 @@ class FaceSwapModelTest {
             diff += abs(Pixels.luma(a[y * mw + x]) - Pixels.luma(b[y * mw + x]))
             n++
         }
-        assertTrue("脸部平均亮度差 ${diff.toFloat() / n}", diff.toFloat() / n < 6f)
+        assertTrue("脸部平均亮度差 ${diff.toFloat() / n}", diff.toFloat() / n < 4f)
     }
 }

@@ -13,7 +13,7 @@ object FaceAlign {
         38.2946f, 51.6963f, 73.5318f, 51.5014f, 56.0252f, 71.7366f, 41.5493f, 92.3655f, 70.7299f, 92.2041f,
     )
 
-    /** inswapper 128×128 的标准位置：ArcFace 模板整体右移 8 像素（和 insightface 的 norm_crop 一致） */
+    /** ArcFace 128×128 的标准位置：ArcFace 模板整体右移 8 像素（和 insightface 的 norm_crop、FaceFusion 的 arcface_128 一致；HyperSwap 按它放大到 256） */
     val ARCFACE_128 = FloatArray(10) { if (it % 2 == 0) ARCFACE_112[it] + 8f else ARCFACE_112[it] }
 
     /** GFPGAN 512×512 的标准位置（FFHQ 数据集的对齐方式，和 FaceFusion 一致） */

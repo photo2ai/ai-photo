@@ -54,3 +54,20 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 - GFPGAN 1.4（电脑上 1.4 秒）：最自然，眼睛、牙齿干净，胡子痕迹基本消失。半精度和原版差 62 dB；只量化卷积的 INT8 反而 273 MB（大部分权重在调制卷积的 Mul 里量化不到）、画质掉到 30 dB，不采用
 
 内存：电脑上半精度版会话默认（全部图优化）建好后 849 MB、跑一次峰值 1059 MB，图优化会把权重提前展开成一份 fp32；关掉图优化后 362 / 801 MB，速度不变，所以 App 里这个模型关掉图优化（`Accel.options`）。它也不测速、固定用 CPU：权重是按风格向量现算的，NNAPI、XNNPACK 帮不上，测速要先后建几个会话，2.5 GB 内存的模拟器上会被系统杀掉。inswapper 也不测速：CPU 上 1 秒多，模拟器上几种加速的结果都和 CPU 对不上；第一次换脸时它的测速（4 次载入 177 MB 模型）紧接着 GFPGAN，App 在 2.5 GB 的模拟器上被杀（占用 1.6 GB），去掉后首次使用正常。
+
+### 换脸模型：HyperSwap 1c（1.0.12 起，取代 inswapper）
+
+`hyperswap_1c_256_w8.onnx`（202,061,901 字节，SHA-256 `702ec8e5dd1b45a89abe366c5815262e49789ba770353e29c5043de036e5b949`）由 [facefusion/models-3.3.0](https://huggingface.co/facefusion/models-3.3.0) 的 `hyperswap_1c_256.onnx`（403 MB，本身就是半精度）经 `scripts/convert_hyperswap.py` 生成：卷积 / 反卷积 / 全连接的权重按输出通道量化成 int8，前接 DequantizeLinear，激活值不量化。和原版差 51～52 dB、速度一样；App 里关掉内存复用规划（电脑上跑一次的峰值 1093 → 705 MB）。模型由 FaceFusion Labs 训练，**没有写明模型许可**（FaceFusion 代码是 OpenRAIL-AS）。输入 `target` float32 `[1,3,256,256]`（RGB，-1..1，按 arcface_128 模板对齐）、`source` `[1,512]`（归一化的 ArcFace 特征），输出 `output`（-1..1）和 `mask`（不用）。
+
+选型（电脑上两张测试照片互换，同样的对齐、贴回；「像不像」用 ArcFace 打分，天然偏向用它训练的 inswapper）：
+
+| 模型 | 只换脸 | 像提供者（女→男 / 男→女） | 耗时 | 体积 |
+|---|---|---|---|---|
+| inswapper 128 | 噪点、胡子痕迹，必须修复 | 0.89 / 0.90 | 0.4～0.6 秒 | 554 MB |
+| HyperSwap 1a / 1b / 1c 256 | 干净，带过提供者的妆容；男→女时换得不够彻底 | 0.82～0.83 / 0.75～0.79 | 0.5～1.1 秒 | 403 MB |
+| AlphaFace 256 | 不错，有胡子残留 | 0.84 / 0.86 | 6.6～8.7 秒 | 556 MB |
+| GHOST 256 | 噪点多 | 0.80 / 0.69 | 0.5～0.7 秒 | 515 + 22 MB |
+
+缩小看时 HyperSwap 只换脸就够干净，但原尺寸（脸宽 500～700 像素）下 256 的输出偏软、牙齿有瑕疵，接上 GFPGAN 后最好：女→男没有胡子痕迹、更像本人，比 inswapper + GFPGAN 好。换脸强度（FaceFusion 的 face_swapper_weight）调高不会更像（0.75 不变，1.0 略降）。压缩：静态 INT8（激活也量化）只有 23～25 dB，且反卷积量化不到、仍有 320～357 MB，不采用。
+
+`inswapper_128_int8.onnx` 仍留在 Hugging Face 仓库给 1.0.10～1.0.11 下载；新版启动时会删掉手机上的旧 inswapper 文件。
