@@ -16,6 +16,11 @@ object FaceAlign {
     /** inswapper 128×128 的标准位置：ArcFace 模板整体右移 8 像素（和 insightface 的 norm_crop 一致） */
     val ARCFACE_128 = FloatArray(10) { if (it % 2 == 0) ARCFACE_112[it] + 8f else ARCFACE_112[it] }
 
+    /** GFPGAN 512×512 的标准位置（FFHQ 数据集的对齐方式，和 FaceFusion 一致） */
+    val FFHQ_512 = floatArrayOf(
+        0.37691676f, 0.46864664f, 0.62285697f, 0.46912813f, 0.50123859f, 0.61331904f, 0.39308822f, 0.72541100f, 0.61150205f, 0.72490465f,
+    ).let { t -> FloatArray(t.size) { t[it] * 512f } }
+
     fun scaled(t: FloatArray, k: Float) = FloatArray(t.size) { t[it] * k }
 
     /** 最小二乘相似变换（旋转 + 等比缩放 + 平移），把 [src] 的点映射到 [dst] */

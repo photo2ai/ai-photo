@@ -48,6 +48,18 @@ object LocalModels {
         "Lakes0001/ai-photo-models/resolve/main/inswapper_128_int8.onnx", inRepo = false, replaces = "inswapper_128_fp16.onnx",
     )
 
+    /**
+     * 高清换脸的人脸修复：GFPGAN 1.4 的半精度版（原版 340 MB，输出和原版差 60 dB 以上）。换脸模型只输出 128×128，
+     * 不修复又糊又假（眼睛、牙齿有瑕疵）。Apache 2.0 许可。scripts/convert_gfpgan_fp16.py 生成，放在我们的 Hugging Face 仓库
+     */
+    val GFPGAN = Model(
+        "gfpgan_1.4_fp16.onnx", "a94d1ae4353e9fee4f7dae2639bf9b3311188eab3d40b9ec8cc821e8aa42db3c", 170_261_734, "人脸修复模型",
+        "Lakes0001/ai-photo-models/resolve/main/gfpgan_1.4_fp16.onnx", inRepo = false,
+    )
+
+    /** 所有本地模型（设置页、本机 AI 加速、启动清理都按这个列表） */
+    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, INSWAPPER, GFPGAN)
+
     private const val BASE = "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/models/"
 
     /** ONNX Runtime 只打了 arm64 的库（见 app/build.gradle），32 位手机用不了本地模型 */
@@ -66,7 +78,7 @@ object LocalModels {
     fun removeReplaced(context: Context) {
         val d = File(context.filesDir, "models")
         if (!d.isDirectory) return
-        for (m in listOf(MIGAN, ESRGAN, ARCFACE, INSWAPPER)) m.replaces?.let { deleteWithMarkers(d, it) }
+        for (m in ALL) m.replaces?.let { deleteWithMarkers(d, it) }
     }
 
     /**

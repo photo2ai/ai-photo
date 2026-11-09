@@ -43,10 +43,12 @@ object Accel {
         LocalModels.INSWAPPER -> Spec(emptyMap(), true, 1, listOf("target" to longArrayOf(1, 3, 128, 128), "source" to longArrayOf(1, 512)))
         LocalModels.ARCFACE -> Spec(mapOf("None" to 1L), true, 1, listOf("input" to longArrayOf(1, 3, 112, 112)))
         LocalModels.MIGAN -> Spec(emptyMap(), false, 1, listOf("image" to longArrayOf(1, 3, 512, 512), "mask" to longArrayOf(1, 1, 512, 512)))
+        // GFPGAN 不测、固定用 CPU：卷积权重是按风格向量现算的（不是常量），NNAPI、XNNPACK 都帮不上；它一个会话跑起来
+        // 就要 800 MB，测速要先后建好几个，2.5 GB 内存的模拟器上直接被系统杀掉
         else -> null
     }
 
-    private fun modelOf(file: File) = listOf(LocalModels.MIGAN, LocalModels.ESRGAN, LocalModels.ARCFACE, LocalModels.INSWAPPER).firstOrNull { it.file == file.name }
+    private fun modelOf(file: File) = LocalModels.ALL.firstOrNull { it.file == file.name }
 
     /** 这个模型文件该用哪种方式；没测过、关了加速、或者不认识的模型都用 CPU */
     fun chosen(file: File): Backend {
@@ -56,12 +58,19 @@ object Accel {
     }
 
     /** 测过没有（关了加速就当测过，不再测） */
-    fun measured(m: LocalModels.Model) = !Store.accelEnabled || Store.accelChoice(m.sha256) != null
+    fun measured(m: LocalModels.Model) = !Store.accelEnabled || spec(m) == null || Store.accelChoice(m.sha256) != null
+
+    /** 这个模型要不要测速（不测的固定用 CPU） */
+    fun benchmarks(m: LocalModels.Model) = spec(m) != null
 
     fun options(file: File, backend: Backend): OrtSession.SessionOptions {
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
         return OrtSession.SessionOptions().apply {
-            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            // GFPGAN 是半精度存的：图优化会把权重提前展开成一份 fp32 常驻内存（电脑上实测会话 849 → 362 MB，跑一次的峰值
+            // 1059 → 801 MB），关掉后每次运行时现转，速度不变
+            setOptimizationLevel(
+                if (modelOf(file) == LocalModels.GFPGAN) OrtSession.SessionOptions.OptLevel.NO_OPT else OrtSession.SessionOptions.OptLevel.ALL_OPT,
+            )
             when (backend) {
                 Backend.CPU -> setIntraOpNumThreads(threads)
                 Backend.XNNPACK -> {

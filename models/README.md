@@ -43,3 +43,14 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 - 局限：校准和评估只有两个人（thispersondoesnotexist 现在返回网页，拿不到更多人脸），换到别的脸上的效果没有量过
 
 换模型时：重新生成后传到上面的仓库（同名覆盖会让老版本 App 校验失败，所以改名再传），改 `LocalModels.ARCFACE` / `INSWAPPER` 的文件名、校验值、大小、`hfPath`、`replaces`，以及 `EditorActivity` 里写的下载大小。单测 `FaceSwapModelTest.neuralSwapInt8MatchesFloat` 在本机 `/tmp/aiphoto-models/q/` 有这两个文件时会核对 emap 和换脸结果。
+
+### 人脸修复：GFPGAN 1.4 半精度（1.0.11 起）
+
+`gfpgan_1.4_fp16.onnx`（170,261,734 字节，SHA-256 `a94d1ae4353e9fee4f7dae2639bf9b3311188eab3d40b9ec8cc821e8aa42db3c`）由 [facefusion/models-3.0.0](https://huggingface.co/facefusion/models-3.0.0) 的 `gfpgan_1.4.onnx`（340 MB）经 `scripts/convert_gfpgan_fp16.py` 转成半精度，放在同一个 Hugging Face 仓库。许可 Apache 2.0（[TencentARC/GFPGAN](https://github.com/TencentARC/GFPGAN)）。输入 `input` float32 `[1,3,512,512]`（RGB，值域 -1..1，按 FFHQ 模板对齐），输出同形状。
+
+选型（电脑上两张测试照片互换，同样的换脸结果后面接不同的修复）：
+- 不修复：inswapper 只有 128×128，放大后发糊，胡子上有白色噪点
+- GPEN-BFR-256（76 MB，半精度 38 MB，电脑上 87 ms）：清楚很多，但残留噪点和胡子阴影；许可只许非商业
+- GFPGAN 1.4（电脑上 1.4 秒）：最自然，眼睛、牙齿干净，胡子痕迹基本消失。半精度和原版差 62 dB；只量化卷积的 INT8 反而 273 MB（大部分权重在调制卷积的 Mul 里量化不到）、画质掉到 30 dB，不采用
+
+内存：电脑上半精度版会话默认（全部图优化）建好后 849 MB、跑一次峰值 1059 MB，图优化会把权重提前展开成一份 fp32；关掉图优化后 362 / 801 MB，速度不变，所以 App 里这个模型关掉图优化（`Accel.options`）。它也不测速、固定用 CPU：权重是按风格向量现算的，NNAPI、XNNPACK 帮不上，测速要先后建几个会话，2.5 GB 内存的模拟器上会被系统杀掉。

@@ -148,10 +148,10 @@ object FaceMesh {
     }
 
     /**
-     * 高清换脸（神经网络）：ArcFace 取参考脸的身份，inswapper 换到目标脸上，Real-ESRGAN 放大到 512 变清楚，
-     * 按脸部轮廓贴回。两个大模型先后加载、用完就释放，同时占用的内存不超过一个。
+     * 高清换脸（神经网络）：ArcFace 取参考脸的身份，inswapper 换到目标脸上，GFPGAN 修复整张脸（见 [NeuralSwap]）。
+     * 三个模型先后加载、用完就释放，同时占用的内存不超过一个。
      */
-    suspend fun neuralSwap(target: Bitmap, ref: Bitmap, arcface: java.io.File, inswapper: java.io.File, esrgan: java.io.File): Bitmap {
+    suspend fun neuralSwap(target: Bitmap, ref: Bitmap, arcface: java.io.File, inswapper: java.io.File, enhancer: java.io.File): Bitmap {
         val (dstFace, srcFace) = detectBoth(target, ref)
         return withContext(Dispatchers.Default) {
             val emb = try {
@@ -164,11 +164,16 @@ object FaceMesh {
             // 贴回只用对齐空间里的羽化方框（和 FaceFusion 默认一样）：模型对脸以外的地方基本原样输出，
             // 再按脸部轮廓裁会在下巴、胡子上切出一道断口
             val swapped = try {
-                NeuralSwap.swap(inswapper, NeuralSwap.emapOf(inswapper), esrgan, c.px, c.w, c.h, five, emb, null)
+                NeuralSwap.swap(inswapper, NeuralSwap.emapOf(inswapper), null, c.px, c.w, c.h, five, emb, null)
             } finally {
                 LocalAi.release(inswapper)
             }
-            pasted(target, c, swapped)
+            val enhanced = try {
+                NeuralSwap.enhance(enhancer, swapped, c.w, c.h, five, null)
+            } finally {
+                LocalAi.release(enhancer)
+            }
+            pasted(target, c, enhanced)
         }
     }
 

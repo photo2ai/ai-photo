@@ -117,7 +117,7 @@ class LocalPartsTest {
     /** 启动时会删掉被取代的旧模型文件：它们绝不能是现在还在用的文件名 */
     @Test
     fun replacedModelFilesAreNotInUse() {
-        val all = listOf(LocalModels.MIGAN, LocalModels.ESRGAN, LocalModels.ARCFACE, LocalModels.INSWAPPER)
+        val all = LocalModels.ALL
         val inUse = all.map { it.file }.toSet()
         for (m in all) m.replaces?.let { org.junit.Assert.assertFalse("${m.file} 取代的 $it 还在用", it in inUse) }
     }

@@ -66,11 +66,12 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<android.view.View>(R.id.checkUpdate).setOnClickListener { UpdateUi.manualCheck(this) }
     }
 
-    private val localModels = listOf(LocalModels.MIGAN, LocalModels.ESRGAN, LocalModels.ARCFACE, LocalModels.INSWAPPER)
+    private val localModels = LocalModels.ALL
 
     private fun showAccel() {
         val lines = localModels.filter { LocalModels.ready(this, it) != null }.map { m ->
-            Store.accelSummary(m.sha256).ifEmpty { m.title + "：还没测，第一次使用时自动测" }
+            if (!Accel.benchmarks(m)) m.title + "：CPU（这个模型加速不了，不用测）"
+            else Store.accelSummary(m.sha256).ifEmpty { m.title + "：还没测，第一次使用时自动测" }
         }
         val head = when {
             !LocalModels.supported() -> "这台手机是 32 位系统，用不了本地模型。"
@@ -79,12 +80,13 @@ class SettingsActivity : AppCompatActivity() {
         }
         findViewById<TextView>(R.id.accelInfo).text =
             head + if (lines.isEmpty()) "\n还没有下载本地模型。" else "\n" + lines.joinToString("\n")
-        findViewById<android.view.View>(R.id.accelTest).isEnabled = Store.accelEnabled && lines.isNotEmpty() && LocalModels.supported()
+        findViewById<android.view.View>(R.id.accelTest).isEnabled = Store.accelEnabled && LocalModels.supported() &&
+            localModels.any { Accel.benchmarks(it) && LocalModels.ready(this, it) != null }
     }
 
     /** 已下载的模型全部重新测一遍 */
     private fun retest() {
-        val models = localModels.mapNotNull { m -> LocalModels.ready(this, m)?.let { m to it } }
+        val models = localModels.filter { Accel.benchmarks(it) }.mapNotNull { m -> LocalModels.ready(this, m)?.let { m to it } }
         val text = TextView(this).apply { setPadding(dp(24), dp(16), dp(24), 0) }
         var job: Job? = null
         val dialog = MaterialAlertDialogBuilder(this)

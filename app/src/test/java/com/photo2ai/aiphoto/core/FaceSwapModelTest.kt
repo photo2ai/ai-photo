@@ -88,6 +88,8 @@ class FaceSwapModelTest {
     private val man = File("/tmp/aiphoto-dl/portrait.jpg")
     private val woman = File("/tmp/aiphoto-dl/street.jpg")
     private val manFive = floatArrayOf(588f, 820f, 902f, 811f, 758f, 1008f, 636f, 1158f, 882f, 1154f)
+    /** 人脸修复模型（scripts/convert_gfpgan_fp16.py 生成），本机有就一起测修复这一步 */
+    private val gfpgan = File("/tmp/aiphoto-models/q/" + LocalModels.GFPGAN.file)
     private val womanFive = floatArrayOf(666f, 708f, 902f, 710f, 780f, 828f, 678f, 930f, 882f, 930f)
 
     private fun read(f: File): Triple<IntArray, Int, Int> {
@@ -102,10 +104,11 @@ class FaceSwapModelTest {
         val emb = NeuralSwap.embedding(arc, wp, ww, wh, womanFive)
         assertEquals(512, emb.size)
         return kotlinx.coroutines.runBlocking {
-            NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), File("../models/" + LocalModels.ESRGAN.file), mp, mw, mh, manFive, emb, null)
+            NeuralSwap.swap(insw, NeuralSwap.emapOf(insw), gfpgan.takeIf { it.isFile }, mp, mw, mh, manFive, emb, null)
         }.also {
             LocalAi.release(arc)
             LocalAi.release(insw)
+            LocalAi.release(gfpgan)
         }
     }
 

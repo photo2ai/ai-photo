@@ -7,9 +7,9 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * 高清换脸（本地神经网络）：ArcFace 取参考脸的身份特征 → inswapper 在目标脸（对齐到 128×128）上换成这个身份 →
- * Real-ESRGAN 把 128 的脸放大到 512 变清楚 → 按蒙版贴回原图。和 insightface / FaceFusion 的流程一致。
- * 模型只允许非商业使用（InsightFace 的许可）。
+ * 高清换脸（本地神经网络），和 FaceFusion 的默认流程一致：ArcFace 取参考脸的身份特征 → inswapper 在目标脸（对齐到
+ * 128×128）上换成这个身份，按软边方框整块贴回 → GFPGAN 把整张脸（对齐到 512×512）修复清楚，和修复前按 8:2 混合贴回。
+ * inswapper 只输出 128×128，又会在眼睛、牙齿、胡子上留瑕疵，不修复的话又糊又假；ArcFace / inswapper 只允许非商业使用。
  */
 object NeuralSwap {
     private var emapCache: Pair<String, FloatArray>? = null
@@ -68,10 +68,10 @@ object NeuralSwap {
 
     /**
      * 在 [px] 的目标脸上换成 [emb] 的身份，返回新的整图像素。[five] 是目标脸的 5 个关键点；[region] 是原图坐标的
-     * 额外蒙版（0..1，比如脸部轮廓，不限制就传 null）；[esrgan] 不为 null 时把换好的脸放大到 512 再贴回去。
+     * 额外蒙版（0..1，比如脸部轮廓，不限制就传 null）；[enhancer] 不为 null 时再用 GFPGAN 修复整张脸（见 [enhance]）。
      */
     suspend fun swap(
-        inswapper: File, emap: FloatArray, esrgan: File?,
+        inswapper: File, emap: FloatArray, enhancer: File?,
         px: IntArray, w: Int, h: Int, five: FloatArray, emb: FloatArray, region: FloatArray?,
     ): IntArray {
         val m128 = FaceAlign.similarity(five, FaceAlign.ARCFACE_128)
@@ -92,42 +92,46 @@ object NeuralSwap {
                 }
             }
         }
-        // 只贴模型真正改过的地方：和输入比，颜色差得多的像素是脸，外扩、羽化成蒙版；头发、背景保留原图的清晰像素
-        var changed = changedMask(face, out, 128)
-        var size = 128
-        var m = m128
-        if (esrgan != null) {
-            out = LocalAi.upscale4x(esrgan, out, 128, 128) {}
-            size = 512
-            m = FloatArray(6) { m128[it] * 4f }
-            changed = Pixels.resizeF(changed, 128, 128, 512, 512)
-        }
-        return pasteBack(px, w, h, out, size, m, region, changed)
-    }
-
-    /** 模型改动的范围：颜色差超过 6 开始算、24 算满，再外扩、羽化，变成连成一片的软蒙版 */
-    fun changedMask(before: IntArray, after: IntArray, size: Int): FloatArray {
-        val d = FloatArray(size * size) { i ->
-            val a = before[i]
-            val b = after[i]
-            val dist = maxOf(
-                kotlin.math.abs((a shr 16 and 0xff) - (b shr 16 and 0xff)),
-                kotlin.math.abs((a shr 8 and 0xff) - (b shr 8 and 0xff)),
-                kotlin.math.abs((a and 0xff) - (b and 0xff)),
-            )
-            Pixels.smoothstep(6f, 24f, dist.toFloat())
-        }
-        val r = max(2, size / 40)
-        val grown = Pixels.blurF(d, size, size, r, 2)
-        for (i in grown.indices) grown[i] = (grown[i] * 2.5f).coerceAtMost(1f)
-        return Pixels.blurF(grown, size, size, r, 2)
+        // 整块贴回（软边方框，和 FaceFusion 默认一样）：模型对脸以外的地方基本原样输出。只贴「改动过」的区域会让
+        // 改动小的地方变成新旧皮肤各一半的斑块
+        val swapped = pasteBack(px, w, h, out, 128, m128, region)
+        return if (enhancer != null) enhance(enhancer, swapped, w, h, five, region) else swapped
     }
 
     /**
-     * 贴回：对齐空间里的方框蒙版（四周一圈渐变到 0）乘上 [changed]（对齐空间）和 [region]（原图空间），
+     * GFPGAN 人脸修复：按 FFHQ 模板把脸对齐到 512×512，输入输出都是 RGB、值域 -1..1；修复后按软边方框贴回，
+     * 和修复前按 8:2 混合（FaceFusion 的默认比例，留一点原来的质感）
+     */
+    fun enhance(model: File, px: IntArray, w: Int, h: Int, five: FloatArray, region: FloatArray?): IntArray {
+        val size = 512
+        val n = size * size
+        val m = FaceAlign.similarity(five, FaceAlign.FFHQ_512)
+        val face = FaceAlign.warp(px, w, h, m, size, size)
+        val input = FloatArray(3 * n)
+        for (i in 0 until n) {
+            val c = face[i]
+            input[i] = (c shr 16 and 0xff) / 127.5f - 1f
+            input[n + i] = (c shr 8 and 0xff) / 127.5f - 1f
+            input[2 * n + i] = (c and 0xff) / 127.5f - 1f
+        }
+        val s = LocalAi.session(model)
+        val restored = OnnxTensor.createTensor(LocalAi.env, FloatBuffer.wrap(input), longArrayOf(1, 3, size.toLong(), size.toLong())).use { t ->
+            s.run(mapOf(s.inputNames.first() to t)).use { r ->
+                val fb = (r.get(0) as OnnxTensor).floatBuffer
+                val o = FloatArray(fb.remaining()).also { fb.get(it) }
+                fun v(x: Float) = Pixels.clamp255((x.coerceIn(-1f, 1f) + 1f) * 127.5f)
+                IntArray(n) { i -> Pixels.ALPHA or (v(o[i]) shl 16) or (v(o[n + i]) shl 8) or v(o[2 * n + i]) }
+            }
+        }
+        val pasted = pasteBack(px, w, h, restored, size, m, region)
+        return IntArray(px.size) { Pixels.lerp(px[it], pasted[it], 0.8f) }
+    }
+
+    /**
+     * 贴回：对齐空间里的方框蒙版（四周一圈渐变到 0）乘上 [region]（原图空间），
      * 原图上每个像素反算到对齐空间取换好的脸混合进去。
      */
-    fun pasteBack(px: IntArray, w: Int, h: Int, face: IntArray, size: Int, m: FloatArray, region: FloatArray?, changed: FloatArray? = null): IntArray {
+    fun pasteBack(px: IntArray, w: Int, h: Int, face: IntArray, size: Int, m: FloatArray, region: FloatArray?): IntArray {
         val box = FloatArray(size * size)
         val edge = max(2, (size * 0.08f).toInt())
         for (y in edge until size - edge) for (x in edge until size - edge) box[y * size + x] = 1f
@@ -141,7 +145,6 @@ object NeuralSwap {
             if (fx < 0 || fy < 0 || fx > size - 1 || fy > size - 1) continue
             val i = y * w + x
             var k = sampleF(soft, size, fx, fy)
-            if (changed != null) k *= sampleF(changed, size, fx, fy)
             if (region != null) k *= region[i]
             if (k <= 0f) continue
             out[i] = Pixels.lerp(px[i], FaceAlign.sample(face, size, size, fx, fy) or Pixels.ALPHA, k.coerceAtMost(1f))
