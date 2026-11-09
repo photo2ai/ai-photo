@@ -102,17 +102,17 @@ object FaceMesh {
         return Face(pts, tris.toIntArray(), oval, holes, box, parts)
     }
 
-    /** 目标脸周围（外扩 [k] 倍脸框）的一块，坐标都换算到这块里 */
+    /** 目标脸周围（外扩 [k] 倍脸框，再并上 [cover]：原图坐标 x0,y0,x1,y1）的一块，坐标都换算到这块里 */
     private class Crop(val x0: Int, val y0: Int, val w: Int, val h: Int, val px: IntArray, val pts: FloatArray)
 
-    private fun crop(target: Bitmap, face: Face, k: Float): Crop {
+    private fun crop(target: Bitmap, face: Face, k: Float, cover: IntArray? = null): Crop {
         val b = face.box
         val mx = (b.width() * k).roundToInt()
         val my = (b.height() * k).roundToInt()
-        val x0 = max(0, b.left - mx)
-        val y0 = max(0, b.top - my)
-        val cw = min(target.width, b.right + mx) - x0
-        val ch = min(target.height, b.bottom + my) - y0
+        val x0 = max(0, min(b.left - mx, cover?.get(0) ?: Int.MAX_VALUE))
+        val y0 = max(0, min(b.top - my, cover?.get(1) ?: Int.MAX_VALUE))
+        val cw = min(target.width, max(b.right + mx, cover?.get(2) ?: 0)) - x0
+        val ch = min(target.height, max(b.bottom + my, cover?.get(3) ?: 0)) - y0
         if (cw < 8 || ch < 8) throw NoFace("脸太小了，换一张脸大一点的照片")
         val px = IntArray(cw * ch).also { target.getPixels(it, 0, cw, x0, y0, cw, ch) }
         val pts = FloatArray(face.pts.size) { if (it % 2 == 0) face.pts[it] - x0 else face.pts[it] - y0 }
@@ -159,7 +159,10 @@ object FaceMesh {
             } finally {
                 LocalAi.release(arcface)
             }
-            val c = crop(target, dstFace, 0.6f)
+            // 裁剪块要盖住人脸修复的整个对齐窗口（约 4 倍眼距见方，头歪时转了角度更大），否则修复结果贴回时
+            // 会在裁剪块边上切出一道直线接缝
+            val window = FaceAlign.backBounds(FaceAlign.similarity(dstFace.five(), FaceAlign.FFHQ_512), 512, target.width, target.height)
+            val c = crop(target, dstFace, 0.6f, window)
             val five = FloatArray(10) { if (it % 2 == 0) dstFace.five()[it] - c.x0 else dstFace.five()[it] - c.y0 }
             // 贴回只用对齐空间里的羽化方框（和 FaceFusion 默认一样）：模型对脸以外的地方基本原样输出，
             // 再按脸部轮廓裁会在下巴、胡子上切出一道断口

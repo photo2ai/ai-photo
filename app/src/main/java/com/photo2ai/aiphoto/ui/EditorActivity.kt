@@ -77,6 +77,9 @@ class EditorActivity : AppCompatActivity() {
         const val EXTRA_EFFECT = "effect"
         const val TOOL_ENHANCE = "enhance"
         const val TOOL_BEAUTY = "beauty"
+
+        /** 高清换脸用的模型，顺序对应 [FaceMesh.neuralSwap] 的参数 */
+        private val SWAP_MODELS = listOf(LocalModels.ARCFACE, LocalModels.INSWAPPER, LocalModels.GFPGAN)
         const val TOOL_AI = "ai"
         const val TOOL_ERASE = "erase"
         const val TOOL_CUTOUT = "cutout"
@@ -1568,8 +1571,11 @@ class EditorActivity : AppCompatActivity() {
 
         override fun cloudNote(cfg: Store.Cloud) = if (cloudMode) super.cloudNote(cfg) else localNote()
 
+        /** 高清换脸要下载的模型总大小，算法和下载提示框一样（按 1024 换算） */
+        private val swapMb = "%.0f".format(SWAP_MODELS.sumOf { it.size } / 1048576.0)
+
         private fun localNote() = if (mode == 0) {
-            "高清换脸用本地神经网络模型（第一次使用下载约 390 MB），照片不会上传；模型来自 InsightFace，仅限非商业使用"
+            "高清换脸用本地神经网络模型（第一次使用下载约 $swapMb MB），照片不会上传；模型来自 InsightFace，仅限非商业使用"
         } else {
             "快速换脸不用下载模型，照片不会上传；正脸、角度相近的两张照片效果最好"
         }
@@ -1612,7 +1618,7 @@ class EditorActivity : AppCompatActivity() {
             if (mode == 1) return localSwap { FaceMesh.swap(current!!, f) }
             if (!LocalModels.supported()) return alert("不支持", "这台手机是 32 位系统，用不了高清换脸的模型，可以选「快速」或「云端 AI」。")
             withModels(
-                listOf(LocalModels.ARCFACE, LocalModels.INSWAPPER, LocalModels.GFPGAN),
+                SWAP_MODELS,
                 "换脸模型来自 InsightFace（inswapper），只允许非商业使用。",
             ) { (arc, insw, gfp) -> localSwap { FaceMesh.neuralSwap(current!!, f, arc, insw, gfp) } }
         }

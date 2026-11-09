@@ -40,11 +40,12 @@ object Accel {
             mapOf("height" to ESRGAN_PAD.toLong(), "width" to ESRGAN_PAD.toLong()), true, 30,
             listOf("input" to longArrayOf(1, 3, ESRGAN_PAD.toLong(), ESRGAN_PAD.toLong())),
         )
-        LocalModels.INSWAPPER -> Spec(emptyMap(), true, 1, listOf("target" to longArrayOf(1, 3, 128, 128), "source" to longArrayOf(1, 512)))
         LocalModels.ARCFACE -> Spec(mapOf("None" to 1L), true, 1, listOf("input" to longArrayOf(1, 3, 112, 112)))
         LocalModels.MIGAN -> Spec(emptyMap(), false, 1, listOf("image" to longArrayOf(1, 3, 512, 512), "mask" to longArrayOf(1, 1, 512, 512)))
         // GFPGAN 不测、固定用 CPU：卷积权重是按风格向量现算的（不是常量），NNAPI、XNNPACK 都帮不上；它一个会话跑起来
-        // 就要 800 MB，测速要先后建好几个，2.5 GB 内存的模拟器上直接被系统杀掉
+        // 就要 800 MB，测速要先后建好几个，2.5 GB 内存的模拟器上直接被系统杀掉。
+        // inswapper（INT8）也不测：CPU 上 1 秒多，模拟器上几种加速的结果都和 CPU 对不上；测它要载入 4 遍 177 MB 的模型，
+        // 第一次换脸时测完紧接着跑 GFPGAN，释放的内存来不及还给系统，2.5 GB 的模拟器上 App 被杀（占用 1.6 GB）
         else -> null
     }
 
