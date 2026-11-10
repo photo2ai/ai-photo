@@ -57,6 +57,8 @@ import com.photo2ai.aiphoto.core.ImageIO
 import com.photo2ai.aiphoto.core.Inpaint
 import com.photo2ai.aiphoto.core.LocalAi
 import com.photo2ai.aiphoto.core.LocalModels
+import com.photo2ai.aiphoto.core.Matting
+import com.photo2ai.aiphoto.core.NeuralSwap
 import com.photo2ai.aiphoto.core.Pixels
 import com.photo2ai.aiphoto.core.Segment
 import com.photo2ai.aiphoto.core.Store
@@ -1008,14 +1010,19 @@ class EditorActivity : AppCompatActivity() {
      * 用本地模型前确认都已下载：缺的一起提示总大小（[note] 是额外说明，比如许可），确认后交给 [ModelDownloads] 下载。
      * 进度弹窗不收起就一直等，下完接着执行 [then]（参数顺序和 [models] 一致）；收起了（后台下载）就不再自动执行，
      * 下完发通知，用户再点一次即可。
+     * [skip] 不为 null 时下载框多一个按钮（文字是 skip 的第一项），不下载、改用不需要模型的做法；
+     * [onCancel] 是不下载也不跳过（点取消、返回、或在等别的模型）时要做的事
      */
-    private fun withModels(models: List<LocalModels.Model>, note: String?, then: (List<File>) -> Unit) {
+    private fun withModels(
+        models: List<LocalModels.Model>, note: String?, skip: Pair<String, () -> Unit>? = null,
+        onCancel: (() -> Unit)? = null, then: (List<File>) -> Unit,
+    ) {
         // 还有别的处理在跑时 busy() 不会开新任务：先拦下，免得「下载」点了没反应
-        if (busyJob?.isActive == true) return toast("请等当前的处理完成")
+        if (busyJob?.isActive == true) return toast("请等当前的处理完成").also { onCancel?.invoke() }
         if (ModelDownloads.running) {
             // 正在下（可能是刚才收到后台的）：要的就是这一批就把进度拿出来接着等，否则先等那一批下完
             if (models.any { it in ModelDownloads.models }) return showModelProgress { measureThen(models, then) }
-            return toast("正在下载其它模型，下完再用这个功能")
+            return toast("正在下载其它模型，下完再用这个功能").also { onCancel?.invoke() }
         }
         val missing = models.filter { LocalModels.ready(this, it) == null }
         if (missing.isEmpty()) return measureThen(models, then)
@@ -1039,7 +1046,9 @@ class EditorActivity : AppCompatActivity() {
                 ModelDownloads.start(this, missing)
                 showModelProgress { measureThen(models, then) }
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton("取消") { _, _ -> onCancel?.invoke() }
+            .setOnCancelListener { onCancel?.invoke() }
+            .apply { skip?.let { (label, run) -> setNeutralButton(label) { _, _ -> run() } } }
             .show()
     }
 
@@ -1125,6 +1134,9 @@ class EditorActivity : AppCompatActivity() {
 
     private inner class CutoutTool : Tool("人像抠图") {
         private var mask: Segment.Mask? = null
+
+        /** 预览图上估好的前景颜色（换底时去掉边缘的原背景色），拖滑杆时不重算 */
+        private var previewFg: IntArray? = null
         private var effect = intent.getStringExtra(EXTRA_EFFECT)
             ?.let { name -> Segment.Effect.entries.firstOrNull { it.name == name } }
             ?.also { intent.removeExtra(EXTRA_EFFECT) } // 只在第一次打开时生效
@@ -1145,17 +1157,31 @@ class EditorActivity : AppCompatActivity() {
             }
             blurRow = bRow
             if (effect != Segment.Effect.BLUR) bRow.visibility = View.INVISIBLE
-            return column(hint("识别照片里的人（本机运行），处理背景"), row, bRow)
+            return column(hint("识别照片里的人（本机运行），处理背景；下载精细抠图模型后头发丝也能抠出来"), row, bRow)
         }
 
         override fun enter() {
+            // 精细抠图要下载约 12 MB 的 MODNet；不想下载（或 32 位手机用不了）就用 ML Kit 普通抠图
+            if (!LocalModels.supported()) return detect(null)
+            withModels(
+                listOf(LocalModels.MODNET), "精细抠图能把头发丝、飘起来的头发抠出来，边缘更自然。",
+                skip = "用普通抠图" to { detect(null) }, onCancel = { closeTool() },
+            ) { (model) -> detect(model) }
+        }
+
+        private fun detect(model: File?) {
             busy("正在识别人像…") {
-                val m = Segment.person(basePreview)
+                val m = try {
+                    Segment.person(basePreview, model)
+                } finally {
+                    model?.let { LocalAi.release(it) }
+                }
                 if (Cutout.coverage(m.data) < 0.005f) {
                     closeTool()
                     alert("没有识别到人", "抠图目前只支持有人物的照片。去掉别的东西可以用「消除」，换背景也可以在「AI 修图」里直接描述。")
                     return@busy
                 }
+                previewFg = withContext(Dispatchers.Default) { Matting.foregroundFull(basePreview, m) }
                 mask = m
                 refresh()
             }
@@ -1165,7 +1191,8 @@ class EditorActivity : AppCompatActivity() {
             val m = mask ?: return
             val e = effect
             val s = blur
-            render { ImageIO.pixels(Segment.render(basePreview, m, e, s)) }
+            val fg = previewFg
+            render { ImageIO.pixels(Segment.render(basePreview, m, e, s, fg)) }
         }
 
         override suspend fun result(): Bitmap? {
@@ -1567,6 +1594,9 @@ class EditorActivity : AppCompatActivity() {
         /** 0 高清（本地神经网络）、1 快速（本地网格贴合）、2 云端 AI */
         private var mode = 0
         private val cloudMode get() = mode == 2
+
+        /** 高清模式下提供脸的人戴眼镜时怎么处理（默认去掉：不然换出来的脸会多一副半透明的眼镜框） */
+        private var glasses = NeuralSwap.Glasses.REMOVE
         override val needsCloud = false
 
         override fun cloudNote(cfg: Store.Cloud) = if (cloudMode) super.cloudNote(cfg) else localNote()
@@ -1602,11 +1632,29 @@ class EditorActivity : AppCompatActivity() {
                 hint("选一张正脸清楚的照片，把它的脸换到当前照片的人物上，保留当前照片的发型、表情、姿势和光线").apply { setPadding(0, dp(6), 0, dp(2)) },
             ) + (if (Store.cloud() == null && !cloudMode) listOf(hint(localNote())) else emptyList()) + listOf(
                 refSlot(if (face == null) "选择提供脸的照片" else "已选择，点这里换一张", face) { face = it },
+            ) + (if (mode == 0) listOf(glassesRow()) else emptyList()) + listOf(
                 LinearLayout(this@EditorActivity).apply {
                     gravity = Gravity.END
                     addView(go)
                 },
             )
+        }
+
+        /** 「戴眼镜时：去掉眼镜 / 保留眼镜」 */
+        private fun glassesRow(): View {
+            val options = NeuralSwap.Glasses.entries
+            val (chips, _) = chipRow(listOf("去掉眼镜", "保留眼镜"), options.indexOf(glasses)) { glasses = options[it] }
+            return LinearLayout(this@EditorActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6), 0, 0)
+                addView(TextView(context).apply {
+                    text = "提供脸的人戴眼镜时"
+                    textSize = 13f
+                    setTextColor(ContextCompat.getColor(context, R.color.ed_text2))
+                    setPadding(0, 0, dp(10), 0)
+                })
+                addView(chips)
+            }
         }
 
         private fun go() {
@@ -1620,7 +1668,7 @@ class EditorActivity : AppCompatActivity() {
             withModels(
                 SWAP_MODELS,
                 "人脸特征模型来自 InsightFace，只允许非商业使用；换脸模型来自 FaceFusion。",
-            ) { (arc, swapper, gfp) -> localSwap { FaceMesh.neuralSwap(current!!, f, arc, swapper, gfp) } }
+            ) { (arc, swapper, gfp) -> localSwap { FaceMesh.neuralSwap(current!!, f, arc, swapper, gfp, glasses) } }
         }
 
         private fun localSwap(run: suspend () -> Bitmap) {

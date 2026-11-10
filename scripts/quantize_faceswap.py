@@ -1,5 +1,5 @@
 # 生成高清换脸用的两个 INT8 模型（做法见 models/README.md「INT8 量化」）。1.0.12 起换脸模型换成了 HyperSwap
-# （scripts/convert_hyperswap.py），这里的 inswapper 只留给 1.0.10～1.0.11；ArcFace 仍在用：
+# （scripts/quantize_weights.py），这里的 inswapper 只留给 1.0.10～1.0.11；ArcFace 仍在用：
 #   arcface_w600k_r50_int8.onnx  全部量化，Percentile 校准
 #   inswapper_128_int8.onnx      先把半精度转回 fp32，只量化卷积；emap 放回最后一个 initializer（App 按这个位置读）
 # 模型太大不进仓库，输出到 [输出目录]，再传到 Hugging Face（见 LocalModels.ARCFACE / INSWAPPER 的 hfPath）。

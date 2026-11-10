@@ -5,14 +5,16 @@ import com.google.android.gms.tasks.Task
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.segmentation.Segmentation
 import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.nio.ByteOrder
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.max
 
 /**
- * 人像分割（ML Kit 自拍分割，模型打在包里，本机运行，不联网）。
+ * 人像分割：下载了 MODNet 就用它精细抠图（见 [Matting]），否则用 ML Kit 自拍分割（模型打在包里，不用下载）。本机运行，不联网。
  * 背景处理的几种效果也在这里：都先在预览尺寸上算，确认时再按原图尺寸算一遍。
  */
 object Segment {
@@ -20,8 +22,9 @@ object Segment {
         fun resized(dw: Int, dh: Int) = if (dw == w && dh == h) data else Pixels.resizeF(data, w, h, dw, dh)
     }
 
-    /** 分割在长边 1024 的图上做，蒙版用导向滤波按这张图的边缘细化 */
-    suspend fun person(src: Bitmap): Mask {
+    /** [modnet] 是下载好的 MODNet 模型文件，null 就用 ML Kit：分割在长边 1024 的图上做，蒙版用导向滤波按这张图的边缘细化 */
+    suspend fun person(src: Bitmap, modnet: java.io.File? = null): Mask {
+        if (modnet != null) return withContext(Dispatchers.Default) { Matting.person(modnet, src) }
         val small = ImageIO.fit(src, 1024)
         val segmenter = Segmentation.getClient(
             SelfieSegmenterOptions.Builder().setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE).build(),
@@ -54,17 +57,21 @@ object Segment {
         else -> 0
     }
 
-    /** 按效果出图。[blur] 0..1 是虚化强度 */
-    fun render(src: Bitmap, mask: Mask, effect: Effect, blur: Float): Bitmap {
+    /**
+     * 按效果出图。[blur] 0..1 是虚化强度。人像用估出来的前景颜色（[Matting.foregroundFull]，去掉边缘混进的原背景色，
+     * 换底不留光晕）；[fg] 是已经算好的（和 [src] 同尺寸），拖滑杆时不用每次重算
+     */
+    fun render(src: Bitmap, mask: Mask, effect: Effect, blur: Float, fg: IntArray? = null): Bitmap {
         val w = src.width
         val h = src.height
         val px = ImageIO.pixels(src)
         val m = mask.resized(w, h)
+        val front = fg ?: Matting.foregroundFull(src, mask)
         val out = when (effect) {
-            Effect.BLUR -> Pixels.composite(px, ImageIO.pixels(blurredBackground(src, mask, blur)), m)
-            Effect.MONO -> Pixels.composite(px, Pixels.gray(px), m)
-            Effect.CLEAR -> Cutout.transparent(px, m)
-            else -> Cutout.overColor(px, m, colorOf(effect))
+            Effect.BLUR -> Pixels.composite(front, ImageIO.pixels(blurredBackground(src, mask, blur)), m)
+            Effect.MONO -> Pixels.composite(front, Pixels.gray(px), m)
+            Effect.CLEAR -> Cutout.transparent(front, m)
+            else -> Cutout.overColor(front, m, colorOf(effect))
         }
         return ImageIO.toBitmap(out, w, h)
     }

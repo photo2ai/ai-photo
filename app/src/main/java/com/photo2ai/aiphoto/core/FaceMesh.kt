@@ -151,11 +151,13 @@ object FaceMesh {
      * 高清换脸（神经网络）：ArcFace 取参考脸的身份，HyperSwap 换到目标脸上，GFPGAN 修复整张脸（见 [NeuralSwap]）。
      * 三个模型先后加载、用完就释放，同时占用的内存不超过一个。
      */
-    suspend fun neuralSwap(target: Bitmap, ref: Bitmap, arcface: java.io.File, swapper: java.io.File, enhancer: java.io.File): Bitmap {
+    suspend fun neuralSwap(
+        target: Bitmap, ref: Bitmap, arcface: java.io.File, swapper: java.io.File, enhancer: java.io.File, glasses: NeuralSwap.Glasses,
+    ): Bitmap {
         val (dstFace, srcFace) = detectBoth(target, ref)
         return withContext(Dispatchers.Default) {
             val emb = try {
-                NeuralSwap.embedding(arcface, ImageIO.pixels(ref), ref.width, ref.height, srcFace.five())
+                NeuralSwap.adjustGlasses(NeuralSwap.embedding(arcface, ImageIO.pixels(ref), ref.width, ref.height, srcFace.five()), glasses)
             } finally {
                 LocalAi.release(arcface)
             }

@@ -42,6 +42,8 @@ object Accel {
         )
         LocalModels.ARCFACE -> Spec(mapOf("None" to 1L), true, 1, listOf("input" to longArrayOf(1, 3, 112, 112)))
         LocalModels.MIGAN -> Spec(emptyMap(), false, 1, listOf("image" to longArrayOf(1, 3, 512, 512), "mask" to longArrayOf(1, 1, 512, 512)))
+        // MODNet 的输入尺寸跟着照片比例变，NNAPI 用不了；测速用 512×768（竖拍照片的典型尺寸）
+        LocalModels.MODNET -> Spec(emptyMap(), false, 1, listOf("input" to longArrayOf(1, 3, 768, 512)))
         // GFPGAN 不测、固定用 CPU：卷积权重是按风格向量现算的（不是常量），NNAPI、XNNPACK 都帮不上；它一个会话跑起来
         // 就要 800 MB，测速要先后建好几个，2.5 GB 内存的模拟器上直接被系统杀掉。
         // HyperSwap 也不测、固定用 CPU：2 亿参数，测速要先后载入好几遍；第一次换脸时测完紧接着跑，释放的内存来不及还给系统，
@@ -69,12 +71,14 @@ object Accel {
         return OrtSession.SessionOptions().apply {
             // GFPGAN 是半精度存的：图优化会把权重提前展开成一份 fp32 常驻内存（电脑上实测会话 849 → 362 MB，跑一次的峰值
             // 1059 → 801 MB），关掉后每次运行时现转，速度不变
-            setOptimizationLevel(
-                if (modelOf(file) == LocalModels.GFPGAN) OrtSession.SessionOptions.OptLevel.NO_OPT else OrtSession.SessionOptions.OptLevel.ALL_OPT,
-            )
-            // HyperSwap 的中间结果很大（256×256 上上千个通道）：内存复用规划会按整张图一次性预留，电脑上实测跑一次的峰值
-            // 1093 → 705 MB，速度不变
-            if (modelOf(file) == LocalModels.HYPERSWAP) setMemoryPatternOptimization(false)
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            // 换脸、人脸修复这两个大模型的中间结果很大：关掉内存复用规划（会按整张图一次性预留）和内存池（用过的内存攒着
+            // 不还），用完就还给系统。2.5 GB 内存的模拟器上实测进程峰值：换脸 948 → 857 MB、修复 969 → 746 MB，速度不变
+            if (modelOf(file) == LocalModels.HYPERSWAP || modelOf(file) == LocalModels.GFPGAN) {
+                setMemoryPatternOptimization(false)
+                setCPUArenaAllocator(false)
+            }
+
             when (backend) {
                 Backend.CPU -> setIntraOpNumThreads(threads)
                 Backend.XNNPACK -> {

@@ -44,7 +44,7 @@ object LocalModels {
 
     /**
      * 高清换脸：HyperSwap 1c（FaceFusion 团队训练，256×256；原版半精度 403 MB）只量化权重的 INT8 版（和原版差 51 dB 以上）。
-     * 换出的脸比 inswapper 干净、更像本人，后面仍接 GFPGAN 修复。scripts/convert_hyperswap.py 生成，放在我们的 Hugging Face 仓库；
+     * 换出的脸比 inswapper 干净、更像本人，后面仍接 GFPGAN 修复。scripts/quantize_weights.py 生成，放在我们的 Hugging Face 仓库；
      * 模型许可没有写明
      */
     val HYPERSWAP = Model(
@@ -54,16 +54,26 @@ object LocalModels {
     )
 
     /**
-     * 高清换脸的人脸修复：GFPGAN 1.4 的半精度版（原版 340 MB，输出和原版差 60 dB 以上）。换脸模型只输出 128×128，
-     * 不修复又糊又假（眼睛、牙齿有瑕疵）。Apache 2.0 许可。scripts/convert_gfpgan_fp16.py 生成，放在我们的 Hugging Face 仓库
+     * 高清换脸的人脸修复：GFPGAN 1.4 只量化权重的 INT8 版（原版 340 MB；和原版差 53 dB 以上）。换脸模型的输出放到照片里
+     * 偏软、牙齿有瑕疵，修一遍才自然。Apache 2.0 许可。scripts/quantize_weights.py --modulated 生成，放在我们的
+     * Hugging Face 仓库。1.0.11～1.0.12 用的半精度版（170 MB）在安卓上跑一次要占 1.4 GB 内存，2.5 GB 的手机上会被系统杀掉
      */
     val GFPGAN = Model(
-        "gfpgan_1.4_fp16.onnx", "a94d1ae4353e9fee4f7dae2639bf9b3311188eab3d40b9ec8cc821e8aa42db3c", 170_261_734, "人脸修复模型",
-        "Lakes0001/ai-photo-models/resolve/main/gfpgan_1.4_fp16.onnx", inRepo = false,
+        "gfpgan_1.4_w8.onnx", "96e10f03a7447d005c056dbaad8af3ae5d9a6e4f41e5727609cf30fa0ea90068", 87_610_198, "人脸修复模型",
+        "Lakes0001/ai-photo-models/resolve/main/gfpgan_1.4_w8.onnx", inRepo = false, replaces = listOf("gfpgan_1.4_fp16.onnx"),
+    )
+
+    /**
+     * 精细人像抠图：MODNet（人像 matting，Apache 2.0）的半精度版，头发丝、飘起来的头发都能抠出来（ML Kit 自拍分割的输入
+     * 只有 256×256，边缘会被一刀切）。直接用 Xenova/modnet 在 Hugging Face 上的文件，和原版透明度平均差 0.03/255
+     */
+    val MODNET = Model(
+        "modnet_fp16.onnx", "25f165da9bfd30830a575f1f0490f1acd995975cb349bc02f3d79332e1fe5cf6", 12_984_781, "精细抠图模型",
+        "Xenova/modnet/resolve/main/onnx/model_fp16.onnx", inRepo = false,
     )
 
     /** 所有本地模型（设置页、本机 AI 加速、启动清理都按这个列表） */
-    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, HYPERSWAP, GFPGAN)
+    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, HYPERSWAP, GFPGAN, MODNET)
 
     private const val BASE = "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/models/"
 

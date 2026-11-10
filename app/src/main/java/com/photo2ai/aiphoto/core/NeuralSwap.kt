@@ -35,6 +35,25 @@ object NeuralSwap {
         }
     }
 
+    /** 提供脸的人戴眼镜时：去掉（默认）还是保留 */
+    enum class Glasses { REMOVE, KEEP }
+
+    /**
+     * 按「眼镜」方向（[GlassesDirection]）调整身份特征。提供者戴眼镜时，特征里带着眼镜，换出来的脸会多一副半透明的眼镜框。
+     * [Glasses.REMOVE]：投影超出「不戴眼镜的人的平均」的部分减去两倍，只减不加（不戴眼镜的人几乎不变，电脑上 86 人
+     * 平均相似度 0.997）；[Glasses.KEEP]：往眼镜方向加 0.15，换出来的是一副完整、清楚的眼镜。结果重新归一化
+     */
+    fun adjustGlasses(emb: FloatArray, mode: Glasses): FloatArray {
+        val g = GlassesDirection.VECTOR
+        var p = 0f
+        for (i in emb.indices) p += emb[i] * g[i]
+        val k = when (mode) {
+            Glasses.REMOVE -> -2f * max(0f, p - GlassesDirection.NO_GLASSES_MEAN)
+            Glasses.KEEP -> 0.15f
+        }
+        return normalize(FloatArray(emb.size) { emb[it] + k * g[it] })
+    }
+
     private fun normalize(v: FloatArray): FloatArray {
         var s = 0.0
         for (x in v) s += x * x

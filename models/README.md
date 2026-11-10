@@ -57,7 +57,7 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 
 ### 换脸模型：HyperSwap 1c（1.0.12 起，取代 inswapper）
 
-`hyperswap_1c_256_w8.onnx`（202,061,901 字节，SHA-256 `702ec8e5dd1b45a89abe366c5815262e49789ba770353e29c5043de036e5b949`）由 [facefusion/models-3.3.0](https://huggingface.co/facefusion/models-3.3.0) 的 `hyperswap_1c_256.onnx`（403 MB，本身就是半精度）经 `scripts/convert_hyperswap.py` 生成：卷积 / 反卷积 / 全连接的权重按输出通道量化成 int8，前接 DequantizeLinear，激活值不量化。和原版差 51～52 dB、速度一样；App 里关掉内存复用规划（电脑上跑一次的峰值 1093 → 705 MB）。模型由 FaceFusion Labs 训练，**没有写明模型许可**（FaceFusion 代码是 OpenRAIL-AS）。输入 `target` float32 `[1,3,256,256]`（RGB，-1..1，按 arcface_128 模板对齐）、`source` `[1,512]`（归一化的 ArcFace 特征），输出 `output`（-1..1）和 `mask`（不用）。
+`hyperswap_1c_256_w8.onnx`（202,061,901 字节，SHA-256 `702ec8e5dd1b45a89abe366c5815262e49789ba770353e29c5043de036e5b949`）由 [facefusion/models-3.3.0](https://huggingface.co/facefusion/models-3.3.0) 的 `hyperswap_1c_256.onnx`（403 MB，本身就是半精度）经 `scripts/quantize_weights.py` 生成：卷积 / 反卷积 / 全连接的权重按输出通道量化成 int8，前接 DequantizeLinear，激活值不量化。和原版差 51～52 dB、速度一样；App 里关掉内存复用规划（电脑上跑一次的峰值 1093 → 705 MB）。模型由 FaceFusion Labs 训练，**没有写明模型许可**（FaceFusion 代码是 OpenRAIL-AS）。输入 `target` float32 `[1,3,256,256]`（RGB，-1..1，按 arcface_128 模板对齐）、`source` `[1,512]`（归一化的 ArcFace 特征），输出 `output`（-1..1）和 `mask`（不用）。
 
 选型（电脑上两张测试照片互换，同样的对齐、贴回；「像不像」用 ArcFace 打分，天然偏向用它训练的 inswapper）：
 
@@ -71,3 +71,20 @@ Real-ESRGAN：输入 `input` float32 `[1,3,H,W]`（RGB 0..1），输出 `output`
 缩小看时 HyperSwap 只换脸就够干净，但原尺寸（脸宽 500～700 像素）下 256 的输出偏软、牙齿有瑕疵，接上 GFPGAN 后最好：女→男没有胡子痕迹、更像本人，比 inswapper + GFPGAN 好。换脸强度（FaceFusion 的 face_swapper_weight）调高不会更像（0.75 不变，1.0 略降）。压缩：静态 INT8（激活也量化）只有 23～25 dB，且反卷积量化不到、仍有 320～357 MB，不采用。
 
 `inswapper_128_int8.onnx` 仍留在 Hugging Face 仓库给 1.0.10～1.0.11 下载；新版启动时会删掉手机上的旧 inswapper 文件。
+
+### 人脸修复改用只量化权重的 INT8（1.0.13 起）
+
+`gfpgan_1.4_w8.onnx`（87,610,198 字节，SHA-256 `96e10f03a7447d005c056dbaad8af3ae5d9a6e4f41e5727609cf30fa0ea90068`）由原版 `gfpgan_1.4.onnx` 经 `scripts/quantize_weights.py --modulated` 生成：除了卷积，调制卷积（Mul 里的 [1, 输出, 输入, k, k] 权重，GFPGAN 绝大部分参数在这）也按输出通道量化成 int8。和原版差 53～54 dB；电脑上 1.8 秒（半精度 2.4 秒），会话 200 MB、跑一次峰值 706 MB。
+
+为什么换：半精度版在安卓上跑一次进程峰值 1687 MB（电脑上 801 MB），2.5 GB 的模拟器上第二次换脸时 App 被系统杀掉。换成这个版本、再关掉内存池和内存复用规划后，模拟器上各步骤的进程峰值：ArcFace 329 MB、HyperSwap 857 MB、GFPGAN 746 MB。
+
+### 眼镜方向（1.0.13 起）
+
+`app/.../core/GlassesDirection.kt` 由 `scripts/glasses_direction.py` 生成：在 StyleGAN 虚构人脸（不戴眼镜的 84 张）上画眼镜（不同形状、粗细、颜色，每张 3 副），同一张脸画前画后 ArcFace INT8 特征的差取平均。没用过真戴眼镜的脸，但已能把它们分开：真戴眼镜的人投影 +0.008～+0.120，不戴的 -0.196～+0.060（平均 -0.060）。只用 12 个真戴眼镜的人和不戴的人相减得到的方向太粗，去不干净。
+
+### 精细抠图：MODNet（1.0.13 起）
+
+`modnet_fp16.onnx`（12,984,781 字节，SHA-256 `25f165da9bfd30830a575f1f0490f1acd995975cb349bc02f3d79332e1fe5cf6`）直接用 [Xenova/modnet](https://huggingface.co/Xenova/modnet) 的 `onnx/model_fp16.onnx`，Apache 2.0（[ZHKKKe/MODNet](https://github.com/ZHKKKe/MODNet)）。输入 `input` float32 `[1,3,H,W]`（RGB，值域 -1..1，H、W 是 32 的倍数），输出 `output` `[1,1,H,W]` 透明度。按官方推理脚本短边缩到 512（它按 512 训练，放大到 768、1024 会把衣服挖出洞）；模拟器上 CPU 约 1.1 秒。
+
+和 ML Kit 自拍分割（256×256）、BiSeNet 人脸解析比过：只有 MODNet 留得住发丝。后处理在 `core/Matting.kt`：透明度放大到长边 2048 后做导向滤波（半径 长边/512，eps 1e-5），再 smoothstep(0.2, 0.8) 收紧过渡带（0.1～0.9 还有灰雾，0.3～0.9 会丢细发丝）；换底前用 blur fusion（Forte & Pitié 2021，半径 90 / 6，按长边/1024 缩放）估计前景色。
+
