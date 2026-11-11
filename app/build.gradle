@@ -66,6 +66,8 @@ dependencies {
     implementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
     // 本地换脸用的人脸网格（468 个点 + 三角剖分），和人像分割共用 ML Kit 的运行库
     implementation 'com.google.mlkit:face-mesh-detection:16.0.0-beta3'
+    // 本地换装找肩、肘、腕、手（33 个点，和 MediaPipe BlazePose 编号一致），模型随包
+    implementation 'com.google.mlkit:pose-detection-accurate:18.0.0-beta5'
     // 本地 AI 消除（MI-GAN）和变清晰（Real-ESRGAN）的推理。模型按需下载，见 LocalModels
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.31.1'
 

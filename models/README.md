@@ -8,6 +8,18 @@ App 第一次用到对应功能时下载，先试 hf-mirror.com（模型原本�
 | `realesr-general-x4v3-int8.onnx` | 「变清晰」放大、高清换脸里把脸放大到 512（1.0.9 起） | 下面这个模型的 INT8 量化版，见下文 | BSD-3-Clause（`LICENSE-Real-ESRGAN`） |
 | `realesr-general-x4v3.onnx` | 1.0.8 及以前的「变清晰」（老版本还会来这里下，不能删） | [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) v0.2.5.0，ONNX 来自 [vlad-grig/realesr-general-x4v3-onnx](https://huggingface.co/vlad-grig/realesr-general-x4v3-onnx) | BSD-3-Clause（`LICENSE-Real-ESRGAN`） |
 
+本地换装（1.0.14 起）还用到下面几个：
+
+| 文件 | 用途 | 来源 | 许可 |
+|---|---|---|---|
+| `selfie_multiclass_256_w8.onnx` | 人像多类别分割：头发 / 身体皮肤 / 脸部皮肤 / 衣服 / 配饰 | Google MediaPipe 的 `selfie_multiclass_256x256.tflite`，下文转换 | Apache 2.0 |
+| `mkl_harmonizer_b0_w8.onnx` | 调色：贴上去的衣服和照片的光线颜色一致 | [MKL-Harmonizer](https://github.com/maria-larchenko/mkl-harmonizer)（AAAI 2026）的 `mkl_encoder_B0_epoch_210.pt`，下文转换 | MIT（`LICENSE-MKL-Harmonizer`） |
+| `depth_anything_v2_small_int8.onnx`（不在这里） | 深度：按身体起伏给衣服加明暗 | [onnx-community/depth-anything-v2-small](https://huggingface.co/onnx-community/depth-anything-v2-small) 的 `onnx/model_int8.onnx`，只从 Hugging Face 下 | Apache 2.0 |
+
+人像分割：tf2onnx 1.17（TensorFlow 2.21，Python 3.11）转出 ONNX，输入 `input_29` float32 `[1,256,256,3]`（**NHWC**，RGB 归一化到 [-1,1]），输出 6 类 logits `[1,256,256,6]`，App 里做 softmax；和 MediaPipe 官方推理的置信度平均差 0.003。再用 `scripts/quantize_weights.py`（不加 `--modulated`，只量化卷积 / 全连接）只量化权重（16 MB → 4.4 MB，逐像素类别和原版一致 99.9%）。
+调色：`torch.onnx.export`（opset 17），输入 `input` float32 `[1,4,256,256]`（RGB + 遮罩，0..1），输出 `filter` `[1,12]`（3×3 颜色矩阵按行 + 偏移，作用在 0..1 的行向量 RGB 上）；同样用 `scripts/quantize_weights.py` 只量化权重，16 MB → 4.3 MB，颜色最大差 5/255。
+深度：输入 `pixel_values` float32 `[1,3,H,W]`（H、W 是 14 的倍数，长边 518，ImageNet 均值方差归一化），输出 `predicted_depth` `[1,H,W]`（相对深度，越大越近）。
+
 另外两个高清换脸模型太大，不放在这里，只从 Hugging Face 下载。1.0.9 及以前用原版（[facefusion/models-3.0.0](https://huggingface.co/facefusion/models-3.0.0)），1.0.10 起用我们的 INT8 版（见下文「INT8 量化」）：
 
 | 文件 | 用途 | 许可 |

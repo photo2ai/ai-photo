@@ -11,3 +11,7 @@
 
 # ONNX Runtime：原生库通过 JNI 按类名、方法名回调 Java 类（OnnxTensor、OrtSession 等），混淆或删掉就会崩
 -keep class ai.onnxruntime.** { *; }
+
+# ML Kit 姿态检测（本地换装）经 mlkit:acceleration 带进了 WorkManager，它的数据库是 Room 按「类名 + _Impl」反射找的，
+# 混淆改了名字就找不到，release 包一启动就崩（Failed to create an instance of androidx.work.impl.WorkDatabase）
+-keep class * extends androidx.room.RoomDatabase { <init>(); }

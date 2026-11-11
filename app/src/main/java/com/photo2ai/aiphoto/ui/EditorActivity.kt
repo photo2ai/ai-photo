@@ -51,6 +51,7 @@ import com.photo2ai.aiphoto.core.CloudProtocol
 import com.photo2ai.aiphoto.core.Cutout
 import com.photo2ai.aiphoto.core.Enhance
 import com.photo2ai.aiphoto.core.FaceMesh
+import com.photo2ai.aiphoto.core.Garment
 import com.photo2ai.aiphoto.core.Filters
 import com.photo2ai.aiphoto.core.History
 import com.photo2ai.aiphoto.core.ImageIO
@@ -62,6 +63,7 @@ import com.photo2ai.aiphoto.core.NeuralSwap
 import com.photo2ai.aiphoto.core.Pixels
 import com.photo2ai.aiphoto.core.Segment
 import com.photo2ai.aiphoto.core.Store
+import com.photo2ai.aiphoto.core.TryOn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,6 +84,8 @@ class EditorActivity : AppCompatActivity() {
 
         /** 高清换脸用的模型，顺序对应 [FaceMesh.neuralSwap] 的参数 */
         private val SWAP_MODELS = listOf(LocalModels.ARCFACE, LocalModels.HYPERSWAP, LocalModels.GFPGAN)
+        /** 本地换装要用的模型，顺序和 TryOn.Models 的参数一致 */
+        private val TRYON_MODELS = listOf(LocalModels.MODNET, LocalModels.MIGAN, LocalModels.PARSING, LocalModels.DEPTH, LocalModels.HARMONIZER)
         const val TOOL_AI = "ai"
         const val TOOL_ERASE = "erase"
         const val TOOL_CUTOUT = "cutout"
@@ -1686,7 +1690,7 @@ class EditorActivity : AppCompatActivity() {
         }
     }
 
-    private inner class OutfitTool : CloudTool("换装", "「换装」给照片里的人换衣服，可以照一张衣服的照片换，也可以直接说想穿什么，由云端图像模型完成。") {
+    private inner class OutfitTool : CloudTool("换装", "「换装」给照片里的人换衣服：本地模式照一张衣服的照片贴到人身上；云端 AI 可以照衣服照片换，也可以直接说想穿什么。") {
         private var cloth: Bitmap? = null
         private var input: TextInputEditText? = null
         private val presets = listOf(
@@ -1702,14 +1706,64 @@ class EditorActivity : AppCompatActivity() {
             "冬装" to "厚实的羊毛大衣和围巾",
         )
 
+        /** 0 本地（贴图式，只能照衣服照片换）、1 云端 AI。没配置云端服务时默认本地 */
+        private var mode = if (Store.cloud() == null) 0 else 1
+        override val needsCloud = false
+
+        override fun cloudNote(cfg: Store.Cloud) = if (mode == 1) super.cloudNote(cfg) else localNote()
+
+        private val localMb = "%.0f".format(TRYON_MODELS.sumOf { it.size } / 1048576.0)
+
+        private fun localNote() =
+            "本地换装把衣服照片变形后贴到人身上，衣服的图案、文字完全保留，照片不会上传（第一次使用下载约 $localMb MB 模型）。" +
+                "没有褶皱，看起来不如云端自然；正面站立的照片、平铺或挂拍的上衣效果最好"
+
         override fun cloudPanel(): List<View> {
+            val (modeRow, _) = chipRow(listOf("本地（快速预览）", "云端 AI"), mode) {
+                mode = it
+                rebuild()
+            }
+            if (mode == 0) {
+                return listOf(
+                    modeRow,
+                    hint("选一张衣服的照片（平铺或挂拍、背景干净的上衣），贴到当前照片的人身上").apply { setPadding(0, dp(6), 0, dp(2)) },
+                ) + (if (Store.cloud() == null) listOf(hint(localNote())) else emptyList()) + listOf(
+                    refSlot(if (cloth == null) "选择衣服的照片" else "已选择，点这里换一张", cloth) { cloth = it },
+                    LinearLayout(this@EditorActivity).apply {
+                        gravity = Gravity.END
+                        addView(button("开始换装", primary = true) { localGo() })
+                    },
+                )
+            }
             val (row, edit) = promptRow("想穿什么？选了衣服照片可以不填") { go() }
             input = edit
             return listOf(
-                refSlot("选择衣服的照片（可选）") { cloth = it },
+                modeRow,
+                refSlot("选择衣服的照片（可选）", cloth) { cloth = it },
                 presetRow(presets) { edit.setText(it); edit.setSelection(it.length) },
                 row,
             )
+        }
+
+        private fun localGo() {
+            val ref = cloth ?: return toast("先选一张衣服的照片")
+            if (!LocalModels.supported()) return alert("不支持", "这台手机是 32 位系统，用不了本地换装的模型，可以选「云端 AI」。")
+            withModels(TRYON_MODELS, null) { (modnet, migan, parsing, depth, harmonizer) ->
+                busy("正在换装…") {
+                    val r = try {
+                        TryOn.run(current!!, ref, TryOn.Models(modnet, migan, parsing, depth, harmonizer))
+                    } catch (e: TryOn.NoPerson) {
+                        alert("没法换装", e.message ?: "")
+                        return@busy
+                    } catch (e: Garment.Bad) {
+                        alert("没法换装", e.message ?: "")
+                        return@busy
+                    }
+                    result = r
+                    photo.setImage(withContext(Dispatchers.Default) { ImageIO.fit(r, PREVIEW_SIDE) })
+                    flashInfo("满意就点 ✓（按住右下角对比原图）", 4000)
+                }
+            }
         }
 
         private fun go() {

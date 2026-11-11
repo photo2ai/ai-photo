@@ -72,8 +72,29 @@ object LocalModels {
         "Xenova/modnet/resolve/main/onnx/model_fp16.onnx", inRepo = false,
     )
 
+    /**
+     * 本地换装：人像多类别分割（头发 / 身体皮肤 / 脸部皮肤 / 衣服 / 配饰），Google MediaPipe 的 selfie_multiclass_256x256
+     * （Apache 2.0）用 tf2onnx 转成 ONNX、只量化权重的 INT8（和原版逐像素类别一致 99.9%）。做法见 models/README.md
+     */
+    val PARSING = Model(
+        "selfie_multiclass_256_w8.onnx", "ba33f45ec5186954a29e2f6469636072a9c0c09136043ad31382d6a19f7b95e0", 4_387_565, "人像分割模型",
+        "Lakes0001/ai-photo-models/resolve/main/selfie_multiclass_256_w8.onnx",
+    )
+
+    /** 本地换装：Depth Anything V2 Small 的 INT8 版（Apache 2.0，onnx-community 转的），估计身体起伏给衣服加明暗 */
+    val DEPTH = Model(
+        "depth_anything_v2_small_int8.onnx", "01aa7a23de3f4a0ee1a2bb9997e6918104c85a9f95dea46d27b9b3fb0c6b9001", 27_258_801, "深度模型",
+        "onnx-community/depth-anything-v2-small/resolve/main/onnx/model_int8.onnx", inRepo = false,
+    )
+
+    /** 本地换装：MKL-Harmonizer（AAAI 2026，MIT）预测颜色矩阵，让贴上去的衣服和照片的光线颜色一致。转 ONNX 后只量化权重 */
+    val HARMONIZER = Model(
+        "mkl_harmonizer_b0_w8.onnx", "6c0597b377c75c73653ccf6c1ae1a885de49cc2fbd4ce53c84b3673f40819903", 4_304_796, "调色模型",
+        "Lakes0001/ai-photo-models/resolve/main/mkl_harmonizer_b0_w8.onnx",
+    )
+
     /** 所有本地模型（设置页、本机 AI 加速、启动清理都按这个列表） */
-    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, HYPERSWAP, GFPGAN, MODNET)
+    val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, HYPERSWAP, GFPGAN, MODNET, PARSING, DEPTH, HARMONIZER)
 
     private const val BASE = "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/models/"
 

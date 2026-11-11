@@ -1,9 +1,9 @@
 {
-  "versionCode": 14,
-  "versionName": "1.0.13",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.13.apk",
-  "sha256": "e84da817361ae4655a5ba43614134f24cf9a38c011d7371f78d175d6ff4b60f8",
-  "size": 28461189,
-  "notes": "换脸：提供脸的人戴眼镜时，默认去掉多出来的眼镜框影子，也可以选择保留眼镜；人脸修复模型换成更小的版本（第一次使用需下载约 84 MB），内存占用大幅减少，连续换脸不再闪退。人像抠图：新增精细抠图（第一次使用需下载约 12 MB，也可以继续用普通抠图），头发丝也能抠出来，换白底时头发周围不再发灰、不留原背景色。",
+  "versionCode": 15,
+  "versionName": "1.0.14",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.14.apk",
+  "sha256": "87ee430931690957f9118af593a8dd159cc563c395054daebae98ff1db2c32f2",
+  "size": 38285667,
+  "notes": "新增本地换装：选一张平铺或挂拍的上衣照片，直接在手机上贴到人身上，衣服的图案、文字完全保留，照片不会上传（第一次使用需下载约 73 MB 模型）；效果不如云端自然，适合快速预览。云端换装照旧可用。",
   "force": false
 }
