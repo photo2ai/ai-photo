@@ -20,6 +20,29 @@ object Garment {
         val sl: V, val sr: V, val al: V, val ar: V, val hl: V, val hr: V, val neck: V,
         /** 'L'（画面左边）、'R' 两只袖子；无袖衣服为空 */
         val sleeves: Map<Char, Sleeve>,
+        /** 下面几项只有内置衣服（[Annotation]）才有，含义见那里 */
+        val wl: V? = null, val wr: V? = null,
+        val long: Boolean = false, val shoulder: Float? = null, val ease: Float? = null, val sleeveSqueeze: Float = 1f,
+    )
+
+    /**
+     * 内置衣服的人工标注（衣服图的像素坐标），由 scripts/garments 生成。自动识别只认平铺的上衣，
+     * 婚纱、旗袍、袍服这类长款和落肩的衣服要靠标注。
+     */
+    class Annotation(
+        val sl: V, val sr: V, val al: V, val ar: V, val hl: V, val hr: V, val neck: V,
+        /** 腰（收腰的衣服），网格多一行，按身体宽度贴 */
+        val wl: V? = null, val wr: V? = null,
+        /** 两只袖子的轮廓多边形（和衣服蒙版取交集），没有就是无袖 */
+        val sleeveL: List<V>? = null, val sleeveR: List<V>? = null,
+        /** 长款（裙子、袍子）：盖住下半身，露出来的旧裤子也要补掉 */
+        val long: Boolean = false,
+        /** 衣服上多宽对应人的肩宽（平铺的袍服肩线在袖子接缝处，比人的肩宽得多）；null 时就是 SL 到 SR 的距离 */
+        val shoulder: Float? = null,
+        /** 腋下、腰两行的宽度按身体宽度 × ease 定（可收可放，宽松的袍子收拢到身上）；null 时只在身体更宽时撑开 */
+        val ease: Float? = null,
+        /** 袖子横向宽度的比例（宽大的袖子垂下来叠在一起，正面看窄） */
+        val sleeveSqueeze: Float = 1f,
     )
 
     class Bad(message: String) : Exception(message)
@@ -180,25 +203,57 @@ object Garment {
             var sm = BooleanArray(mask.size) { sleeveZone[it] && (if (side == 'L') it % w < cx else it % w >= cx) }
             if (Masks.count(sm) < 0.01f * total) continue
             sm = Masks.largest(sm, w, h)
-            val s = if (side == 'L') sl else sr
-            val a = if (side == 'L') al else ar
-            val root = (s + a) / 2f
-            var dmax = 0f
-            for (i in sm.indices) if (sm[i]) dmax = max(dmax, (V((i % w).toFloat(), (i / w).toFloat()) - root).norm())
-            // 袖口中心 = 离袖根最远的那一圈
-            var cxs = 0f
-            var cys = 0f
-            var cn = 0
-            for (i in sm.indices) if (sm[i]) {
-                val p = V((i % w).toFloat(), (i / w).toFloat())
-                if ((p - root).norm() > 0.85f * dmax) { cxs += p.x; cys += p.y; cn++ }
-            }
-            val cuff = V(cxs / max(cn, 1), cys / max(cn, 1))
-            sleeves[side] = Sleeve(sm, root, (cuff - root).unit(), (cuff - root).norm())
+            sleeves[side] = sleeve(sm, w, if (side == 'L') sl else sr, if (side == 'L') al else ar)
         }
         return Parsed(
             w, h, mask, torso, top, tb, bot, cx,
             sl, sr, al, ar, V(xlH, tb.toFloat()), V(xrH, tb.toFloat()), V(cx.toFloat(), top.toFloat()), sleeves,
         )
+    }
+
+    /** 袖子的根（肩和腋下的中点）、方向和长度：袖口中心 = 离袖根最远的那一圈 */
+    private fun sleeve(sm: BooleanArray, w: Int, s: V, a: V): Sleeve {
+        val root = (s + a) / 2f
+        var dmax = 0f
+        for (i in sm.indices) if (sm[i]) dmax = max(dmax, (V((i % w).toFloat(), (i / w).toFloat()) - root).norm())
+        var cxs = 0f
+        var cys = 0f
+        var cn = 0
+        for (i in sm.indices) if (sm[i]) {
+            val p = V((i % w).toFloat(), (i / w).toFloat())
+            if ((p - root).norm() > 0.85f * dmax) { cxs += p.x; cys += p.y; cn++ }
+        }
+        val cuff = V(cxs / max(cn, 1), cys / max(cn, 1))
+        return Sleeve(sm, root, (cuff - root).unit(), (cuff - root).norm())
+    }
+
+    /** 内置衣服：关键点、袖子轮廓都按 [a]，不走自动识别 */
+    fun annotated(mask: BooleanArray, w: Int, h: Int, a: Annotation): Parsed {
+        val rows = (0 until h).filter { y -> (0 until w).any { mask[y * w + it] } }
+        if (rows.isEmpty()) throw Bad("衣服图是空的")
+        val sleeves = HashMap<Char, Sleeve>()
+        val inSleeve = BooleanArray(mask.size)
+        for ((side, poly) in listOf('L' to a.sleeveL, 'R' to a.sleeveR)) {
+            if (poly == null) continue
+            val pm = fillPolygon(w, h, poly)
+            var sm = BooleanArray(mask.size) { mask[it] && pm[it] }
+            if (Masks.count(sm) < 50) continue
+            // 多边形里的碎块（下摆两侧鼓出来的）不算躯干，也不算袖子：袖子只留最大一块，不然袖口方向会被带偏
+            for (i in sm.indices) if (sm[i]) inSleeve[i] = true
+            sm = Masks.largest(sm, w, h)
+            sleeves[side] = sleeve(sm, w, if (side == 'L') a.sl else a.sr, if (side == 'L') a.al else a.ar)
+        }
+        val torso = BooleanArray(mask.size) { mask[it] && !inSleeve[it] }
+        return Parsed(
+            w, h, mask, torso, rows.first(), ((a.hl.y + a.hr.y) / 2).roundToInt(), rows.last(), a.neck.x.roundToInt(),
+            a.sl, a.sr, a.al, a.ar, a.hl, a.hr, a.neck, sleeves,
+            a.wl, a.wr, a.long, a.shoulder, a.ease, a.sleeveSqueeze,
+        )
+    }
+
+    /** 任意（可以是凹的）多边形填充，和换脸用的是同一个扫描线实现 */
+    fun fillPolygon(w: Int, h: Int, poly: List<V>): BooleanArray {
+        val f = FaceSwap.fill(FloatArray(poly.size * 2) { if (it % 2 == 0) poly[it / 2].x else poly[it / 2].y }, w, h)
+        return BooleanArray(f.size) { f[it] > 0f }
     }
 }

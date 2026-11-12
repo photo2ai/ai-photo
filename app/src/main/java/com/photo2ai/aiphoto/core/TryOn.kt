@@ -173,14 +173,15 @@ object TryOn {
 
     // ---------------------------------------------------------------- 主流程
 
-    suspend fun run(src: Bitmap, cloth: Bitmap, m: Models): Bitmap {
+    /** [ann] 不为 null 时是内置衣服：按人工标注拆衣服、贴体（见 [Garment.Annotation]），否则自动识别（只认上衣） */
+    suspend fun run(src: Bitmap, cloth: Bitmap, m: Models, ann: Garment.Annotation? = null): Bitmap {
         val work = if (max(src.width, src.height) > WORK) withContext(Dispatchers.Default) { ImageIO.fit(src, WORK) } else src
         val clock = Clock()
         val lm = pose(work) ?: throw NoPerson("没找到人。请用能看到上半身（肩膀到腰）的正面照片")
         // 只要求两肩在画面里；腰、手在画面外时 ML Kit 也会给出推测的位置，够用
         for (k in intArrayOf(11, 12)) if (lm[k][2] < 0.5f) throw NoPerson("没看清两边肩膀，请用能看到上半身的正面照片")
         clock.mark("pose")
-        val result = withContext(Dispatchers.Default) { render(work, cloth, lm, m, clock) }
+        val result = withContext(Dispatchers.Default) { render(work, cloth, lm, m, clock, ann) }
         return withContext(Dispatchers.Default) { pasteBack(src, work, result).also { clock.mark("pasteBack") } }
     }
 
@@ -200,7 +201,7 @@ object TryOn {
         return ImageIO.toBitmap(Pixels.composite(big, ImageIO.pixels(src), mask), sw, sh)
     }
 
-    private fun render(work: Bitmap, clothBmp: Bitmap, lm: Array<FloatArray>, m: Models, clock: Clock): IntArray {
+    private fun render(work: Bitmap, clothBmp: Bitmap, lm: Array<FloatArray>, m: Models, clock: Clock, ann: Garment.Annotation?): IntArray {
         val w = work.width
         val h = work.height
         val n = w * h
@@ -232,7 +233,9 @@ object TryOn {
         val cw = clothBmp.width
         val chh = clothBmp.height
         val cloth = ImageIO.pixels(clothBmp)
-        val g = Garment.parse(Garment.cutout(cloth, cw, chh), cw, chh)
+        // 内置衣服是抠好的透明 WebP，直接用透明度当蒙版（细肩带、蕾丝边经不起开运算）
+        val cmask = if (ann != null) BooleanArray(cloth.size) { (cloth[it] ushr 24) >= 128 } else Garment.cutout(cloth, cw, chh)
+        val g = if (ann != null) Garment.annotated(cmask, cw, chh, ann) else Garment.parse(cmask, cw, chh)
         clock.mark("garment")
 
         // 肩部目标：从肩关节沿「向上」走到人像轮廓，再往外一点（衣服肩线在关节外上方）
@@ -252,11 +255,14 @@ object TryOn {
         // 衣服上的向量 → 人身上：旋转 + 缩放（让衣服两肩对上人的两肩）
         val gv = g.sr - g.sl
         val pv = tsr - tsl
-        val s = pv.norm() / gv.norm()
+        // 落肩的袍服：衣服上 shoulder 这么宽对应人的肩宽，竖向（衣长、袖长）按这个比例；肩点仍对人的肩，横向下面 fit 收拢
+        val s = pv.norm() / (g.shoulder ?: gv.norm())
         val ang = kotlin.math.atan2(pv.y, pv.x) - kotlin.math.atan2(gv.y, gv.x)
         val ca = kotlin.math.cos(ang) * s
         val sa = kotlin.math.sin(ang) * s
-        fun f(p: V): V { val d = p - g.sl; return tsl + V(ca * d.x - sa * d.y, sa * d.x + ca * d.y) }
+        val anchorG = if (g.shoulder != null) (g.sl + g.sr) / 2f else g.sl
+        val anchorP = if (g.shoulder != null) (tsl + tsr) / 2f else tsl
+        fun f(p: V): V { val d = p - anchorG; return anchorP + V(ca * d.x - sa * d.y, sa * d.x + ca * d.y) }
         var tal = f(g.al)
         var tar = f(g.ar)
         var thl = f(g.hl)
@@ -267,28 +273,87 @@ object TryOn {
         val arms = BooleanArray(n)
         for (k in intArrayOf(iL, iR)) Masks.capsule(w, h, listOf(P(k), P(k + 2), P(k + 4)), 0.13f * sw, arms)
         val body = BooleanArray(n) { person[it] && !arms[it] }
-        fun widen(a: V, b: V): Pair<V, V> {
+        /** a、b 中点所在那一行身体连续的一段 (左, 右)；中点不在身体上返回 null */
+        fun bodySpan(a: V, b: V): Pair<Int, Int>? {
             val y = ((a.y + b.y) / 2).toInt().coerceIn(0, h - 1)
-            val mid = (a + b) / 2f
-            val mx = mid.x.toInt().coerceIn(0, w - 1)
-            if (!body[y * w + mx]) return a to b
+            val mx = ((a.x + b.x) / 2).toInt().coerceIn(0, w - 1)
+            if (!body[y * w + mx]) return null
             var l = mx
             while (l > 0 && body[y * w + l - 1]) l--
             var r = mx
             while (r < w - 1 && body[y * w + r + 1]) r++
-            val need = (r - l) * 1.04f
-            val have = (b - a).norm()
-            if (have >= need) return a to b
-            val k = need / have
-            val c = V((l + r) / 2f, mid.y)
+            return l to r
+        }
+        /** 以身体中心把 a、b 缩放 k 倍 */
+        fun scaleAt(a: V, b: V, span: Pair<Int, Int>, k: Float): Pair<V, V> {
+            val mid = (a + b) / 2f
+            val c = V((span.first + span.second) / 2f, mid.y)
             return (c + (a - mid) * k) to (c + (b - mid) * k)
         }
-        widen(tal, tar).let { tal = it.first; tar = it.second }
+        fun widen(a: V, b: V): Pair<V, V> {
+            val span = bodySpan(a, b) ?: return a to b
+            val need = (span.second - span.first) * 1.04f
+            val have = (b - a).norm()
+            return if (have >= need) a to b else scaleAt(a, b, span, need / have)
+        }
+        /** 内置衣服：这一行宽度按身体宽度 × ease 定（可收可放），中心对到身体中心；返回新的两点和缩放比例 */
+        fun fit(a: V, b: V, ease: Float): Triple<V, V, Float> {
+            val span = bodySpan(a, b)
+            if (span == null) {
+                // 这一行中点不在身体上（侧身、手臂挡在胸前、抠图断开）：按人的肩宽 × ease 收拢，落肩的袍子不能原样放着（比人宽近一倍）
+                val k = (tsr - tsl).norm() * ease / ((b - a).norm() + 1e-6f)
+                val mid = (a + b) / 2f
+                return Triple(mid + (a - mid) * k, mid + (b - mid) * k, k)
+            }
+            val k = (span.second - span.first) * ease / ((b - a).norm() + 1e-6f)
+            val (a1, b1) = scaleAt(a, b, span, k)
+            return Triple(a1, b1, k)
+        }
+        // 腰（收腰的内置衣服才有）：网格多一行
+        var waist: Pair<V, V>? = if (g.wl != null && g.wr != null) f(g.wl) to f(g.wr) else null
+        // 落肩的衣服按真实比例放大后一定比人宽，没写 ease 也要收拢
+        val ease = g.ease ?: if (g.shoulder != null) 1.4f else null
+        if (ease != null) {
+            val (a1, b1, kA) = fit(tal, tar, ease)
+            tal = a1; tar = b1
+            waist = waist?.let { (l, r) -> fit(l, r, ease).let { it.first to it.second } }
+            // 腋下收窄了，下摆按同样比例收（保持衣服原来的外扩比例）
+            if (kA < 1f) {
+                val c = (thl + thr) / 2f
+                thl = c + (thl - c) * kA
+                thr = c + (thr - c) * kA
+            }
+        } else {
+            widen(tal, tar).let { tal = it.first; tar = it.second }
+            waist = waist?.let { (l, r) -> widen(l, r) }
+        }
         widen(thl, thr).let { thl = it.first; thr = it.second }
 
-        // 躯干网格：列 = 左外侧 / 左边线 / 中线 / 右边线 / 右外侧，行 = 衣服顶 / 肩 / 腋下 / 下摆 / 衣服最底（系带等）。
+        // 躯干网格：列 = 左外侧 / 左边线 / 中线 / 右边线 / 右外侧，行 = 衣服顶 / 肩 / 腋下 /（腰，内置衣服才有）/ 下摆 / 衣服最底（系带等）。
         // 边线上肩到腋下这段和袖根是同一条直线，袖子接上去没有缝
-        val mg = 0.35f * (g.sr.x - g.sl.x)
+        val bottom = g.bottom + 2f
+        var mg = 0.35f * (g.sr.x - g.sl.x)
+        run {
+            // 外侧列要盖住所有躯干像素：钟形裙摆、A 字下摆在两行之间鼓出两行连线，固定的余量会把鼓出来的部分切掉
+            val ls = listOfNotNull(V(g.sl.x, g.top.toFloat()), g.sl, g.al, g.wl, g.hl, V(g.hl.x, bottom))
+            val rs = listOfNotNull(V(g.sr.x, g.top.toFloat()), g.sr, g.ar, g.wr, g.hr, V(g.hr.x, bottom))
+            fun sideX(side: List<V>, y: Float): Float {
+                if (y <= side.first().y) return side.first().x
+                for (i in 0 until side.size - 1) {
+                    val a = side[i]
+                    val b = side[i + 1]
+                    if (y <= b.y) return if (b.y - a.y < 1e-3f) b.x else a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
+                }
+                return side.last().x
+            }
+            var excess = 0f
+            for (y in 0 until chh) {
+                val xl = sideX(ls, y.toFloat())
+                val xr = sideX(rs, y.toFloat())
+                for (x in 0 until cw) if (g.torso[y * cw + x]) excess = max(excess, max(xl - x, x - xr))
+            }
+            mg = max(mg, excess + 2f)
+        }
         val down = -up
         fun row(lg: V, rg: V, lp: V, rp: V, cg: V? = null, cp: V? = null): Pair<List<V>, List<V>> {
             val od = (rp - lp).unit()
@@ -296,11 +361,16 @@ object TryOn {
             return listOf(lg - V(mg, 0f), lg, cg ?: ((lg + rg) / 2f), rg, rg + V(mg, 0f)) to
                 listOf(lp - od * (mg * k), lp, cp ?: ((lp + rp) / 2f), rp, rp + od * (mg * k))
         }
-        val bottom = g.bottom + 2f
         val rows = listOf(
-            row(V(g.sl.x, g.top.toFloat()), V(g.sr.x, g.top.toFloat()), tsl + up * ((g.sl.y - g.top) * s), tsr + up * ((g.sr.y - g.top) * s), g.neck, tn),
+            // 领口点低于两肩（方领、一字领的礼服）时顶行中点比肩行还低，网格会翻折：改用两肩连线中点
+            if (g.neck.y <= min(g.sl.y, g.sr.y)) {
+                row(V(g.sl.x, g.top.toFloat()), V(g.sr.x, g.top.toFloat()), tsl + up * ((g.sl.y - g.top) * s), tsr + up * ((g.sr.y - g.top) * s), g.neck, tn)
+            } else {
+                row(V(g.sl.x, g.top.toFloat()), V(g.sr.x, g.top.toFloat()), tsl + up * ((g.sl.y - g.top) * s), tsr + up * ((g.sr.y - g.top) * s))
+            },
             row(g.sl, g.sr, tsl, tsr),
             row(g.al, g.ar, tal, tar),
+        ) + (waist?.let { (l, r) -> listOf(row(g.wl!!, g.wr!!, l, r)) } ?: emptyList()) + listOf(
             row(g.hl, g.hr, thl, thr),
             row(V(g.hl.x, bottom), V(g.hr.x, bottom), thl + down * ((bottom - g.hl.y) * s), thr + down * ((bottom - g.hr.y) * s)),
         )
@@ -320,7 +390,15 @@ object TryOn {
             val el = P(k + 2)
             val wr = P(k + 4)
             val ext = wr + (wr - el).unit() * sw // 腕往外延长，长袖可以盖过手腕
-            val poly = listOf(root, el, wr, ext)
+            val upper = (el - root).norm()
+            // 折线圆角（Chaikin 3 次）：肘部弯得急（自拍时手在胸前）时，截面方向要逐步转过去，不然外侧四边形会被拉成扇面甩出去
+            var poly = listOf(root, el, wr, ext)
+            repeat(3) {
+                val q = arrayListOf(poly.first())
+                for ((a, b) in poly.zipWithNext()) { q += a * 0.75f + b * 0.25f; q += a * 0.25f + b * 0.75f }
+                q += poly.last()
+                poly = q
+            }
             val seg = poly.zipWithNext { a, b -> (b - a).norm() }
             fun at(len: Float): Pair<V, V> {
                 var l = len
@@ -335,9 +413,18 @@ object TryOn {
             }
             val ax = sl.axis
             val ng = ax.rot90()
-            val flip = sign((sG - sl.root) dot ng) != sign((sP - root) dot at(1f).second.rot90())
-            val sgnS = if (((sG - sl.root) dot ng) >= 0) 1f else -1f
-            val nSt = if (sl.length > 1.25f * seg[0] / s) 6 else 3
+            // 袖子横截面上哪一侧是肩（外缘）：两个依据取更可靠的那个。「腋下→肩」在袖子水平伸出时可靠、手臂下垂时几乎和袖轴平行；
+            // 「衣身在哪一侧」正好相反。只用前者，垂袖会随机翻面扭成细条甩出去；只用后者，T 字形平铺的袖子会翻面
+            fun shoulderSide(sh: V, arm: V, root0: V, center: V, n: V): Int {
+                val a = ((sh - arm) dot n) / ((sh - arm).norm() + 1e-6f)
+                val b = ((center - root0) dot n) / ((center - root0).norm() + 1e-6f)
+                return if (abs(a) >= abs(b)) sign(a) else -sign(b)
+            }
+            val sideG = shoulderSide(sG, aG, sl.root, V(g.cx.toFloat(), (sG.y + aG.y) / 2), ng)
+            val sideP = shoulderSide(sP, aP, root, (tsl + tsr) / 2f, at(1f).second.rot90())
+            val flip = sideG != sideP
+            val sgnS = sideG.toFloat()
+            val nSt = if (sl.length > 1.25f * upper / s) 12 else 3
             // 截面垂直于袖轴，袖根却是竖的：第一个截面要在袖根两端之后，否则四边形会扭成交叉
             val tFirst = max(max((sG - sl.root) dot ax, (aG - sl.root) dot ax), 0f) + 0.08f * sl.length
             val ts = if (tFirst < 0.9f * sl.length) List(nSt) { tFirst + (1.03f * sl.length - tFirst) * it / max(nSt - 1, 1) } else listOf(1.03f * sl.length)
@@ -370,7 +457,7 @@ object TryOn {
                 val (dS, dA) = if (sgnS > 0) hi to lo else lo to hi
                 gEdges += (sl.root + ax * tc + ng * dS) to (sl.root + ax * tc + ng * dA)
                 val (p, u) = at(tc * s)
-                val nrm = u.rot90() * ((if (flip) -1f else 1f) * s)
+                val nrm = u.rot90() * ((if (flip) -1f else 1f) * s * g.sleeveSqueeze)
                 pEdges += (p + nrm * dS) to (p + nrm * dA)
             }
             val ext2 = Masks.dilate(sl.mask, cw, chh, e.toInt() + 2)
@@ -385,11 +472,11 @@ object TryOn {
                 pairs += listOf(g0, q1, q0) to listOf(p0, r1, r0)
             }
             sleevesW += warpTris(garmentBitmap(cloth, extMask, cw, chh), pairs, w, h)
-            sleeveInfo[k] = SleeveInfo(root, sl.length * s, sl.length * s > 1.1f * seg[0])
+            sleeveInfo[k] = SleeveInfo(root, sl.length * s, sl.length * s > 1.1f * upper)
         }
 
         clock.mark("warp")
-        return compose(px, w, h, alpha, person, skin, parts, dep, lm, iL, iR, sw, arms, torsoW, sleevesW, sleeveInfo.mapValues { Triple(it.value.root, it.value.len, it.value.long) }, m, clock)
+        return compose(px, w, h, alpha, person, skin, parts, dep, lm, iL, iR, sw, arms, torsoW, sleevesW, sleeveInfo.mapValues { Triple(it.value.root, it.value.len, it.value.long) }, m, clock, g.long)
     }
 
     private fun sign(v: Float) = if (v >= 0) 1 else -1
@@ -442,6 +529,7 @@ object TryOn {
         px: IntArray, w: Int, h: Int, alpha: FloatArray, person: BooleanArray, skin: FloatArray, parts: Parts, dep: FloatArray,
         lm: Array<FloatArray>, iL: Int, iR: Int, sw: Float, arms: BooleanArray,
         torsoW: IntArray, sleevesW: List<IntArray>, sleeveInfo: Map<Int, Triple<V, Float, Boolean>>, m: Models, clock: Clock,
+        long: Boolean,
     ): IntArray {
         val n = w * h
         val P = { k: Int -> V(lm[k][0], lm[k][1]) }
@@ -457,15 +545,24 @@ object TryOn {
         Masks.capsule(w, h, listOf(P(0)), max(3f, 0.12f * sw), face)
         for (i in 0 until n) face[i] = face[i] && skin[i] > 0.5f
         val expo = if (Masks.count(face) > 20) (Masks.median(lum, face) / 0.68f).coerceIn(0.45f, 1.1f) else 1f
-        val region = BooleanArray(n) { cover[it] && person[it] }
-        val light = lighting(lum, region, w, h, sw)
-        val inside = Masks.erode(region, w, h, max(2, (0.04f * sw).toInt()))
+        val hipY = (lm[23][1] + lm[24][1]) / 2
+        // 光照只按原来的衣服估：手、手机、头发、皮肤的亮度不是衣服上的光照。长款只用胯部以上（下面是裤子、腿）
+        val oldCloth = BooleanArray(n) { person[it] && parts.clothes[it] > 0.5f && skin[it] < 0.3f && parts.hair[it] < 0.5f }
+        val region = BooleanArray(n) { cover[it] && oldCloth[it] && (!long || it / w < hipY) }
+        val light = lighting(lum, region, w, h, sw, long)
+        val inside = Masks.erode(BooleanArray(n) { cover[it] && person[it] }, w, h, max(2, (0.04f * sw).toInt()))
         if (Masks.count(inside) > 100) {
-            val d = Pixels.blurF(dep, w, h, Masks.gaussianSigmaToBox(max(1.5f, 0.03f * sw)))
+            // 只在人身上平滑深度：人和背景之间的深度落差模糊开，会在身体边缘一整圈压暗（领口、肩上的灰环）
+            val sr = Masks.gaussianSigmaToBox(max(1.5f, 0.03f * sw))
+            val pw = Pixels.blurF(FloatArray(n) { if (person[it]) 1f else 0f }, w, h, sr)
+            val pd = Pixels.blurF(FloatArray(n) { if (person[it]) dep[it] else 0f }, w, h, sr)
+            val d = FloatArray(n) { pd[it] / max(pw[it], 1e-3f) }
             val gx = FloatArray(n)
             val gy = FloatArray(n)
             for (y in 0 until h) for (x in 0 until w) {
                 val i = y * w + x
+                // 人体外没有深度依据（d 在那里掉到 0，梯度很陡）：不加明暗，免得衣服超出身体的那一圈被压暗
+                if (pw[i] < 0.5f) continue
                 gx[i] = (d[y * w + min(x + 1, w - 1)] - d[y * w + max(x - 1, 0)]) / (if (x in 1 until w - 1) 2f else 1f)
                 gy[i] = (d[min(y + 1, h - 1) * w + x] - d[max(y - 1, 0) * w + x]) / (if (y in 1 until h - 1) 2f else 1f)
             }
@@ -478,16 +575,22 @@ object TryOn {
                 nz.coerceIn(0.5f, 1f).pow(0.6f)
             }
             val med = Masks.median(shD, inside)
-            for (i in 0 until n) light[i] *= (shD[i] / med).coerceIn(0.6f, 1.08f)
+            for (i in 0 until n) {
+                var k = (shD[i] / med).coerceIn(if (long) 0.8f else 0.6f, if (long) 1.05f else 1.08f)
+                // 长款的深度明暗只用在胯部以上：裙摆不贴腿，两腿之间的深度变化不是裙子的起伏
+                if (long) k = 1 + (k - 1) * ((hipY + 0.2f * sw - i / w) / (0.2f * sw)).coerceIn(0f, 1f)
+                light[i] *= k
+            }
         }
         // 白平衡：原图整体偏色（灰世界）的一半迁移到衣服上
         var mr = 0.0; var mgr = 0.0; var mb = 0.0
         for (c in px) { mr += c shr 16 and 0xff; mgr += c shr 8 and 0xff; mb += c and 0xff }
         val mm = (mr + mgr + mb) / 3 + 1e-3
         val cast = doubleArrayOf(mr, mgr, mb).map { (1 + 0.5 * (it / mm - 1)).toFloat().coerceIn(0.85f, 1.15f) }
+        val folds = folds(px, w, h, sw, BooleanArray(n) { cover[it] && oldCloth[it] && it / w < hipY + 0.1f * sw })
         val e22 = expo.pow(2.2f)
         for (l in layers) for (i in 0 until n) if (l.a[i] > 0f) {
-            val lt = light[i].pow(2.2f) * e22
+            val lt = light[i].pow(2.2f) * e22 * folds[i]
             for (c in 0 until 3) l.rgb[i * 3 + c] = (l.rgb[i * 3 + c].pow(2.2f) * lt * cast[c]).coerceIn(0f, 1f).pow(1 / 2.2f)
         }
 
@@ -526,7 +629,6 @@ object TryOn {
         // ---- 遮挡
         val yy = { i: Int -> (i / w).toFloat() }
         val shY = (lm[11][1] + lm[12][1]) / 2
-        val hipY = (lm[23][1] + lm[24][1]) / 2
         // 原来的上衣：分割里的「衣服」类，再排除颜色更像裤子的（裤子也算衣服类）
         val clothes = BooleanArray(n) { parts.clothes[it] > 0.5f }
         val topS = BooleanArray(n) { clothes[it] && yy(it) > shY && yy(it) < (shY + hipY) / 2 && !arms[it] }
@@ -594,12 +696,23 @@ object TryOn {
             Pixels.ALPHA or (Pixels.clamp255(res[it * 3] * 255f) shl 16) or (Pixels.clamp255(res[it * 3 + 1] * 255f) shl 8) or Pixels.clamp255(res[it * 3 + 2] * 255f)
         }
         clock.mark("occlusion")
-        // 新衣服没盖住、露出来的旧上衣：用 MI-GAN 补掉（和「消除」同一个模型）
+        // 新衣服没盖住、露出来的旧上衣：用 MI-GAN 补掉（和「消除」同一个模型）。长款在整件衣服的高度内都补，裤子也算
         val coverAny = BooleanArray(n) { covA[it] > 0.3f }
+        val bandEnd = if (long) {
+            var i = n - 1
+            while (i > 0 && !coverAny[i]) i--
+            (i / w).toFloat()
+        } else {
+            hipY + 0.15f * sw
+        }
+        val old = if (long) clothes else oldTop
+        val armsEnd = hipY + 0.15f * sw
         var shownOld = BooleanArray(n) {
             val y = yy(it)
-            person[it] && !coverAny[it] && y > chinY && y < hipY + 0.15f * sw && oldTop[it] && skin[it] < 0.3f &&
-                front[it] <= 0.3f && !hands[it] && parts.hair[it] < 0.5f
+            person[it] && !coverAny[it] && y > chinY && y < bandEnd && old[it] && skin[it] < 0.3f &&
+                front[it] <= 0.3f && !hands[it] && parts.hair[it] < 0.5f &&
+                // 长款往下补到裙摆，但胯部以下垂着的手臂（穿着长袖）不是要去掉的旧衣服
+                !(y >= armsEnd && arms[it])
         }
         shownOld = Masks.open(shownOld, w, h, 2)
         shownOld = Masks.dropSmall(shownOld, w, h, (0.0005f * n).toInt())
@@ -612,14 +725,58 @@ object TryOn {
         return out
     }
 
-    /** 原图大尺度明暗：模糊亮度 / 区域中位亮度，限制在 0.7～1.15 */
-    private fun lighting(lum: FloatArray, region: BooleanArray, w: Int, h: Int, sw: Float): FloatArray {
+    /**
+     * 原图大尺度明暗：模糊亮度 / 区域中位亮度，限制在 0.7～1.15；离 region（原来的衣服）远的地方没有依据，按 1。
+     * [long]（长款，region 只有胯部以上）：幅度收窄到 0.85～1.1
+     */
+    private fun lighting(lum: FloatArray, region: BooleanArray, w: Int, h: Int, sw: Float, long: Boolean): FloatArray {
         val n = w * h
         val r = Masks.gaussianSigmaToBox(max(2f, sw * 0.12f))
         val wsum = Pixels.blurF(FloatArray(n) { if (region[it]) 1f else 0f }, w, h, r)
         val lb = Pixels.blurF(FloatArray(n) { if (region[it]) lum[it] else 0f }, w, h, r)
         val med = if (Masks.count(region) > 0) Masks.median(lum, region) else 0.5f
-        return FloatArray(n) { (lb[it] / max(wsum[it], 1e-3f) / max(med, 1e-3f)).coerceIn(0.7f, 1.15f) }
+        return FloatArray(n) {
+            val v = 1 + ((lb[it] / max(wsum[it], 1e-3f) / max(med, 1e-3f)).coerceIn(0.7f, 1.15f) - 1) * (wsum[it] / 0.3f).coerceIn(0f, 1f)
+            if (long) v.coerceIn(0.85f, 1.1f) else v
+        }
+    }
+
+    /**
+     * 褶皱迁移：原图里旧衣服 [region] 的明暗细节（褶皱、身体起伏、照片颗粒）除以它的局部均值，得到乘在新衣服上的比例（线性亮度）。
+     * 旧衣服的图案不能带过来：印字、口袋缝线、牛仔布纹是锐利边缘，褶皱是柔和过渡——锐利边缘附近不迁移，
+     * 边缘密集的地方（印花、粗纹理、暗处噪点）整片不迁移。电脑原型上对比过（vton-eval 的原型副本 tryon3.py）
+     */
+    private fun folds(px: IntArray, w: Int, h: Int, sw: Float, region: BooleanArray): FloatArray {
+        val n = w * h
+        val out = FloatArray(n) { 1f }
+        if (Masks.count(region) < 200) return out
+        val lin = FloatArray(256) { (it / 255f).pow(2.2f) }
+        val y = FloatArray(n) { val c = px[it]; 0.2126f * lin[c shr 16 and 0xff] + 0.7152f * lin[c shr 8 and 0xff] + 0.0722f * lin[c and 0xff] }
+        val r = Masks.gaussianSigmaToBox(max(2f, 0.05f * sw))
+        val rw = Pixels.blurF(FloatArray(n) { if (region[it]) 1f else 0f }, w, h, r)
+        val ry = Pixels.blurF(FloatArray(n) { if (region[it]) y[it] else 0f }, w, h, r)
+        val feather = Pixels.blurF(FloatArray(n).also { f -> Masks.erode(region, w, h, 1).forEachIndexed { i, b -> if (b) f[i] = 1f } }, w, h, Masks.gaussianSigmaToBox(1.5f))
+        // 边缘：对数亮度轻微模糊后的梯度
+        val lg = Pixels.blurF(FloatArray(n) { kotlin.math.ln(y[it] + 0.01f) }, w, h, 1)
+        val edge = BooleanArray(n)
+        for (yy in 1 until h - 1) for (x in 1 until w - 1) {
+            val i = yy * w + x
+            val gx = (lg[i + 1] - lg[i - 1]) / 2
+            val gy = (lg[i + w] - lg[i - w]) / 2
+            edge[i] = gx * gx + gy * gy > 0.07f * 0.07f
+        }
+        val near = Pixels.blurF(FloatArray(n).also { f -> Masks.dilate(edge, w, h, 3).forEachIndexed { i, b -> if (b) f[i] = 1f } }, w, h, Masks.gaussianSigmaToBox(1.5f))
+        val dens = Pixels.blurF(FloatArray(n) { if (edge[it]) 1f else 0f }, w, h, Masks.gaussianSigmaToBox(max(2f, 0.03f * sw)))
+        for (i in 0 until n) {
+            if (feather[i] <= 0f) continue
+            val base = ry[i] / max(rw[i], 1e-3f)
+            // 压缩大的偏差（口袋、印花边缘），保留柔和的明暗；很暗的旧衣服信噪比低，少用
+            val d = 1 + kotlin.math.tanh((y[i] / max(base, 1e-3f) - 1) / 0.35f) * 0.35f
+            val k = ((base - 0.01f) / 0.04f).coerceIn(0f, 1f)
+            val wgt = (1 - near[i]) * (1 - (dens[i] - 0.05f) / 0.1f).coerceIn(0f, 1f)
+            out[i] = 1 + (d - 1) * k * feather[i] * wgt * 0.9f
+        }
+        return out
     }
 
     /** 一层衣服：rgb（0..1，每像素 3 个）+ 透明度 */

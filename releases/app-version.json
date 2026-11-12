@@ -1,9 +1,9 @@
 {
-  "versionCode": 15,
-  "versionName": "1.0.14",
-  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.14.apk",
-  "sha256": "87ee430931690957f9118af593a8dd159cc563c395054daebae98ff1db2c32f2",
-  "size": 38285667,
-  "notes": "新增本地换装：选一张平铺或挂拍的上衣照片，直接在手机上贴到人身上，衣服的图案、文字完全保留，照片不会上传（第一次使用需下载约 73 MB 模型）；效果不如云端自然，适合快速预览。云端换装照旧可用。",
+  "versionCode": 16,
+  "versionName": "1.0.15",
+  "url": "https://gh-proxy.com/https://raw.githubusercontent.com/photo2ai/ai-photo/main/releases/AI-Photo-1.0.15.apk",
+  "sha256": "9733385d0d1916825bc139e342d4934542991d7c0c9c3eca66a86c226fe9c125",
+  "size": 38500596,
+  "notes": "换装新增 32 件常用衣服：日常、外套、正装、裙装、婚礼（婚纱、秀禾服、新郎礼服）、古装（汉服、马面裙、圆领袍、唐装、龙袍）、异国（和服、韩服），不用自己找衣服照片，本地和云端都能用（第一次使用下载约 2.4 MB 衣服包）。本地换装更自然：衣服带上原照片的褶皱和明暗，长袖贴手臂更准。",
   "force": false
 }

@@ -20,6 +20,8 @@ App 第一次用到对应功能时下载，先试 hf-mirror.com（模型原本�
 调色：`torch.onnx.export`（opset 17），输入 `input` float32 `[1,4,256,256]`（RGB + 遮罩，0..1），输出 `filter` `[1,12]`（3×3 颜色矩阵按行 + 偏移，作用在 0..1 的行向量 RGB 上）；同样用 `scripts/quantize_weights.py` 只量化权重，16 MB → 4.3 MB，颜色最大差 5/255。
 深度：输入 `pixel_values` float32 `[1,3,H,W]`（H、W 是 14 的倍数，长边 518，ImageNet 均值方差归一化），输出 `predicted_depth` `[1,H,W]`（相对深度，越大越近）。
 
+换装的常用衣服包 `outfits_v1.zip`（1.0.15 起，2.4 MB，不是模型）：32 件衣服的透明 WebP 和关键点标注，28 件 AI 生成、4 件博物馆开放馆藏（CC0），来源和生成方法见 `scripts/garments/README.md`。
+
 另外两个高清换脸模型太大，不放在这里，只从 Hugging Face 下载。1.0.9 及以前用原版（[facefusion/models-3.0.0](https://huggingface.co/facefusion/models-3.0.0)），1.0.10 起用我们的 INT8 版（见下文「INT8 量化」）：
 
 | 文件 | 用途 | 许可 |

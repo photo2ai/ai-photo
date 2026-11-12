@@ -34,6 +34,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.core.view.isVisible
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
@@ -60,6 +61,7 @@ import com.photo2ai.aiphoto.core.LocalAi
 import com.photo2ai.aiphoto.core.LocalModels
 import com.photo2ai.aiphoto.core.Matting
 import com.photo2ai.aiphoto.core.NeuralSwap
+import com.photo2ai.aiphoto.core.Outfits
 import com.photo2ai.aiphoto.core.Pixels
 import com.photo2ai.aiphoto.core.Segment
 import com.photo2ai.aiphoto.core.Store
@@ -1690,9 +1692,16 @@ class EditorActivity : AppCompatActivity() {
         }
     }
 
-    private inner class OutfitTool : CloudTool("换装", "「换装」给照片里的人换衣服：本地模式照一张衣服的照片贴到人身上；云端 AI 可以照衣服照片换，也可以直接说想穿什么。") {
+    private inner class OutfitTool : CloudTool("换装", "「换装」给照片里的人换衣服：选一件常用衣服或一张衣服的照片贴到人身上；云端 AI 还可以直接说想穿什么。") {
+        /** 自己选的衣服照片；和 [builtin] 只有一个不为 null */
         private var cloth: Bitmap? = null
+        /** 选中的常用衣服 */
+        private var builtin: Outfits.Item? = null
         private var input: TextInputEditText? = null
+        /** 重建面板时保留：常用衣服的分类、横排滚到的位置、输入框里写了一半的字 */
+        private var outfitCat = 0
+        private var outfitScroll = 0
+        private var draft = ""
         private val presets = listOf(
             "西装" to "合身的深色商务西装，白衬衫，系领带",
             "职业装" to "简洁干练的职业套装",
@@ -1723,35 +1732,97 @@ class EditorActivity : AppCompatActivity() {
                 mode = it
                 rebuild()
             }
+            // 选了常用衣服就清掉自己的照片，反过来也一样
+            val slot = { label: String -> refSlot(label, cloth) { cloth = it; builtin = null; rebuild() } }
             if (mode == 0) {
                 return listOf(
                     modeRow,
-                    hint("选一张衣服的照片（平铺或挂拍、背景干净的上衣），贴到当前照片的人身上").apply { setPadding(0, dp(6), 0, dp(2)) },
+                    hint("选一件常用衣服，或一张衣服的照片（平铺或挂拍、背景干净的上衣），贴到当前照片的人身上").apply { setPadding(0, dp(6), 0, dp(2)) },
                 ) + (if (Store.cloud() == null) listOf(hint(localNote())) else emptyList()) + listOf(
-                    refSlot(if (cloth == null) "选择衣服的照片" else "已选择，点这里换一张", cloth) { cloth = it },
+                    outfitRow(),
+                    slot(if (cloth == null) "或者选一张衣服的照片" else "已选择，点这里换一张"),
                     LinearLayout(this@EditorActivity).apply {
                         gravity = Gravity.END
                         addView(button("开始换装", primary = true) { localGo() })
                     },
                 )
             }
-            val (row, edit) = promptRow("想穿什么？选了衣服照片可以不填") { go() }
+            val (row, edit) = promptRow("想穿什么？选了衣服可以不填") { go() }
             input = edit
+            if (draft.isNotEmpty()) edit.setText(draft)
+            edit.doAfterTextChanged { draft = it?.toString().orEmpty() }
             return listOf(
                 modeRow,
-                refSlot("选择衣服的照片（可选）", cloth) { cloth = it },
+                outfitRow(),
+                slot(if (cloth == null) "选择衣服的照片（可选）" else "已选择，点这里换一张"),
                 presetRow(presets) { edit.setText(it); edit.setSelection(it.length) },
                 row,
             )
         }
 
+        /** 常用衣服：上面一行分类，下面是这一类的缩略图横排（缩略图随 APK，衣服大图第一次用时下载），点一下选中，再点取消 */
+        private fun outfitRow(): View {
+            val (cats, catRow) = chipRow(Outfits.CATEGORIES, outfitCat) {
+                outfitCat = it
+                outfitScroll = 0
+                rebuild()
+            }
+            // 重建后分类行回到最左边：滚到选中的分类，免得它被挤到边上只露一半
+            cats.post { catRow.getChildAt(outfitCat)?.let { c -> cats.scrollTo((c.left - dp(16)).coerceAtLeast(0), 0) } }
+            val group = LinearLayout(this@EditorActivity)
+            for (item in Outfits.ITEMS.filter { it.category == Outfits.CATEGORIES[outfitCat] }) {
+                val on = item == builtin
+                group.addView(LinearLayout(this@EditorActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    isClickable = true
+                    setOnClickListener {
+                        builtin = if (on) null else item
+                        if (builtin != null) cloth = null
+                        rebuild()
+                    }
+                    addView(ImageView(context).apply {
+                        setImageResource(item.thumb)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        setBackgroundResource(if (on) R.drawable.bg_outfit_on else R.drawable.bg_outfit)
+                        setPadding(dp(6), dp(6), dp(6), dp(6))
+                    }, LinearLayout.LayoutParams(dp(60), dp(60)))
+                    addView(TextView(context).apply {
+                        text = item.name
+                        textSize = 12f
+                        setTextColor(ContextCompat.getColor(context, if (on) R.color.accent else R.color.ed_text2))
+                        setPadding(0, dp(3), 0, 0)
+                    })
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) })
+            }
+            val thumbs = HorizontalScrollView(this@EditorActivity).apply {
+                isHorizontalScrollBarEnabled = false
+                setPadding(0, dp(6), 0, dp(2))
+                addView(group)
+                post { scrollTo(outfitScroll, 0) }
+                setOnScrollChangeListener { _, x, _, _, _ -> outfitScroll = x }
+            }
+            return LinearLayout(this@EditorActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(6), 0, 0)
+                addView(cats)
+                addView(thumbs)
+            }
+        }
+
         private fun localGo() {
-            val ref = cloth ?: return toast("先选一张衣服的照片")
+            val item = builtin
+            val ref = cloth
+            if (item == null && ref == null) return toast("先选一件衣服，或者选一张衣服的照片")
             if (!LocalModels.supported()) return alert("不支持", "这台手机是 32 位系统，用不了本地换装的模型，可以选「云端 AI」。")
-            withModels(TRYON_MODELS, null) { (modnet, migan, parsing, depth, harmonizer) ->
+            // 常用衣服的大图在衣服包里，和模型一起下载
+            val models = if (item != null) TRYON_MODELS + LocalModels.OUTFITS else TRYON_MODELS
+            withModels(models, null) { files ->
+                val (modnet, migan, parsing, depth, harmonizer) = files
                 busy("正在换装…") {
                     val r = try {
-                        TryOn.run(current!!, ref, TryOn.Models(modnet, migan, parsing, depth, harmonizer))
+                        val (c, ann) = if (item != null) withContext(Dispatchers.IO) { Outfits.load(files.last(), item.id) } else ref!! to null
+                        TryOn.run(current!!, c, TryOn.Models(modnet, migan, parsing, depth, harmonizer), ann)
                     } catch (e: TryOn.NoPerson) {
                         alert("没法换装", e.message ?: "")
                         return@busy
@@ -1768,8 +1839,20 @@ class EditorActivity : AppCompatActivity() {
 
         private fun go() {
             val desc = input?.text?.toString()?.trim().orEmpty()
+            val item = builtin
             val ref = cloth
-            if (ref == null && desc.isEmpty()) return toast("选一张衣服的照片，或者写想穿什么")
+            if (item == null && ref == null && desc.isEmpty()) return toast("选一件衣服或一张衣服的照片，或者写想穿什么")
+            if (item != null) {
+                // 常用衣服：衣服包里的图当参考图（透明背景铺成白底：OpenAI 按 PNG 上传会带着透明），衣服的名字放在描述前面
+                if (Store.cloud() == null) return askConfigure()
+                val prompt = CloudProtocol.outfitPrompt(if (desc.isEmpty()) item.name else "${item.name}：$desc", hasRef = true)
+                withModels(listOf(LocalModels.OUTFITS), null) { (zip) ->
+                    generate("AI 正在换装…") { cfg ->
+                        Cloud.compose(cfg, current!!, withContext(Dispatchers.IO) { ImageIO.flattenWhite(Outfits.load(zip, item.id).first) }, prompt)
+                    }
+                }
+                return
+            }
             val prompt = CloudProtocol.outfitPrompt(desc, hasRef = ref != null)
             generate("AI 正在换装…") { cfg ->
                 if (ref != null) Cloud.compose(cfg, current!!, ref, prompt) else Cloud.edit(cfg, current!!, prompt, wrap = false)

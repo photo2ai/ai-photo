@@ -93,6 +93,15 @@ object LocalModels {
         "Lakes0001/ai-photo-models/resolve/main/mkl_harmonizer_b0_w8.onnx",
     )
 
+    /**
+     * 换装的常用衣服包（不是模型）：32 件衣服的透明 WebP + 关键点标注，scripts/garments 生成，见 [Outfits]。
+     * 不放进 [ALL]：设置页按模型列出、测速都用不上它
+     */
+    val OUTFITS = Model(
+        "outfits_v1.zip", "fdd838f6874a618b371de5607dd9efade533136c1e33e20079dbdb47e50a8c4e", 2_426_609, "换装衣服",
+        "Lakes0001/ai-photo-models/resolve/main/outfits_v1.zip",
+    )
+
     /** 所有本地模型（设置页、本机 AI 加速、启动清理都按这个列表） */
     val ALL get() = listOf(MIGAN, ESRGAN, ARCFACE, HYPERSWAP, GFPGAN, MODNET, PARSING, DEPTH, HARMONIZER)
 

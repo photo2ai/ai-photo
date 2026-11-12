@@ -137,4 +137,50 @@ class GarmentTest {
         assertEquals(100f, TryOn.Color.rgbToLab(1f, 1f, 1f)[0], 0.1f)
         assertEquals(0f, TryOn.Color.rgbToLab(0.5f, 0.5f, 0.5f)[1], 0.1f)
     }
+
+    @Test
+    fun concavePolygonFill() {
+        // 凹的 L 形：右上角那块不在里面
+        val m = Garment.fillPolygon(w, h, listOf(V(10f, 10f), V(110f, 10f), V(110f, 60f), V(60f, 60f), V(60f, 110f), V(10f, 110f)))
+        assertTrue(m[30 * w + 30] && m[30 * w + 100] && m[100 * w + 30])
+        assertFalse(m[100 * w + 100])
+        assertFalse(m[5 * w + 30] || m[30 * w + 115])
+    }
+
+    @Test
+    fun annotatedSplitsBySleevePolygonsAndKeepsOptions() {
+        // 长袍：躯干 100..200 × 40..380，两只袖子水平伸出（40..100 和 200..260 × 40..110）
+        val m = blank()
+        rect(m, 100, 40, 200, 380)
+        rect(m, 40, 40, 100, 110)
+        rect(m, 200, 40, 260, 110)
+        val a = Garment.Annotation(
+            sl = V(100f, 40f), sr = V(200f, 40f), al = V(100f, 110f), ar = V(200f, 110f), hl = V(100f, 379f), hr = V(200f, 379f), neck = V(150f, 40f),
+            wl = V(100f, 200f), wr = V(200f, 200f),
+            sleeveL = listOf(V(0f, 0f), V(100f, 0f), V(100f, 112f), V(0f, 112f)),
+            sleeveR = listOf(V(200f, 0f), V(300f, 0f), V(300f, 112f), V(200f, 112f)),
+            long = true, shoulder = 60f, ease = 1.4f, sleeveSqueeze = 0.6f,
+        )
+        val g = Garment.annotated(m, w, h, a)
+        assertEquals(setOf('L', 'R'), g.sleeves.keys)
+        assertFalse(g.torso[70 * w + 60])
+        assertTrue(g.torso[70 * w + 150] && g.torso[300 * w + 150])
+        // 袖子朝外，长度约 60
+        assertTrue(g.sleeves['L']!!.axis.x < -0.8f && g.sleeves['R']!!.axis.x > 0.8f)
+        assertTrue(g.sleeves['L']!!.length in 45f..75f)
+        assertEquals(379, g.hem)
+        assertEquals(379, g.bottom)
+        assertTrue(g.long && g.shoulder == 60f && g.ease == 1.4f && g.sleeveSqueeze == 0.6f && g.wl == V(100f, 200f))
+    }
+
+    @Test
+    fun annotatedWithoutSleevesIsAllTorso() {
+        val m = blank()
+        rect(m, 100, 40, 200, 380)
+        val a = Garment.Annotation(V(100f, 40f), V(200f, 40f), V(100f, 110f), V(200f, 110f), V(100f, 379f), V(200f, 379f), V(150f, 40f))
+        val g = Garment.annotated(m, w, h, a)
+        assertTrue(g.sleeves.isEmpty())
+        assertEquals(Masks.count(m), Masks.count(g.torso))
+        assertFalse(g.long)
+    }
 }
